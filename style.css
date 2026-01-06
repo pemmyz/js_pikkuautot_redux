@@ -1,0 +1,98 @@
+body {
+    margin: 0;
+    padding: 0;
+    background-color: #111;
+    overflow: hidden;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: #eee;
+    user-select: none;
+}
+
+#gameContainer {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+}
+
+#canvas-container {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+canvas {
+    display: block; /* Removes bottom whitespace */
+}
+
+/* Header & HUD */
+#gameHeader {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    padding: 15px;
+    box-sizing: border-box;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    pointer-events: none;
+    z-index: 10;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+}
+
+h1 {
+    margin: 0;
+    text-shadow: 2px 2px 0px #000;
+    color: #ffcc00; /* GTA logo color vibe */
+    font-style: italic;
+    font-size: 2.5em;
+}
+
+#headerButtons {
+    position: absolute;
+    right: 20px;
+    pointer-events: auto;
+}
+
+button {
+    background: #333;
+    color: white;
+    border: 1px solid #666;
+    padding: 8px 15px;
+    cursor: pointer;
+    font-weight: bold;
+    border-radius: 4px;
+}
+button:hover { background: #555; }
+
+/* Menus */
+.menu-overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(20, 20, 20, 0.95);
+    border: 2px solid #555;
+    padding: 20px 40px;
+    border-radius: 8px;
+    z-index: 20;
+    min-width: 300px;
+    text-align: center;
+    box-shadow: 0 0 30px rgba(0,0,0,0.8);
+}
+.menu-overlay.hidden { display: none; }
+.setting-row { display: flex; justify-content: space-between; margin: 10px 0; align-items: center; }
+.slider-value { width: 30px; text-align: right; color: #ffcc00; }
+
+/* HUD */
+#hud {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    pointer-events: none;
+    font-family: monospace;
+    font-size: 1.2em;
+    text-shadow: 1px 1px 0 #000;
+}
+#p1Score { color: #ff6666; }
+#p2Score { color: #6666ff; }
