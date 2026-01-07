@@ -34,21 +34,38 @@
             <div class="about-info">
                 <p>GTA 1 Style remake with Three.js & Planck.js</p>
             </div>
-            <p class="close-help">(Press H or click button to close)</p>
+            <p class="close-help clickable">(Press H or Click Here to close)</p>
         </div>
 
         <!-- Customize Menu -->
         <div id="customizeMenu" class="menu-overlay hidden">
-            <h2>Customize Physics</h2>
+            <h2>Customize & Optimize</h2>
+            
+            <!-- Graphics & Performance Settings -->
+            <div class="setting-row">
+                <label>Shadows (GPU):</label>
+                <input type="checkbox" id="shadowsToggle" checked>
+            </div>
+            <div class="setting-row">
+                <label>Low Res (GPU):</label>
+                <input type="checkbox" id="lowResToggle">
+            </div>
+            <div class="setting-row">
+                <label>Lite Physics (CPU):</label>
+                <input type="checkbox" id="litePhysicsToggle">
+            </div>
+            <hr>
+
+            <!-- Physics Settings -->
             <div class="setting-row">
                 <label>Car Speed:</label>
-                <input type="range" id="playerSpeedSlider" min="10" max="100" step="5" value="40">
-                <span class="slider-value" id="playerSpeedValue">40</span>
+                <input type="range" id="playerSpeedSlider" min="10" max="150" step="5" value="100">
+                <span class="slider-value" id="playerSpeedValue">100</span>
             </div>
              <div class="setting-row">
                 <label>Enemy Speed:</label>
-                <input type="range" id="enemySpeedSlider" min="10" max="80" step="5" value="25">
-                <span class="slider-value" id="enemySpeedValue">25</span>
+                <input type="range" id="enemySpeedSlider" min="10" max="120" step="5" value="70">
+                <span class="slider-value" id="enemySpeedValue">70</span>
             </div>
              <div class="setting-row">
                 <label>Traffic Density:</label>
@@ -57,7 +74,7 @@
             </div>
             <hr>
             <button id="newGameButton">Restart Game</button>
-            <p class="close-customize">(Press C to close)</p>
+            <p class="close-customize clickable">(Press C or Click Here to close)</p>
         </div>
         
         <!-- HUD Overlay -->
