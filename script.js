@@ -393,7 +393,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (Math.random() < 0.02) spawnTraffic();
 
         // 2. Physics
-        // Using variable iterations based on Lite Physics Toggle
         world.step(TIME_STEP, velIter, posIter);
 
         // 3. Player Control & Gamepad Handling
@@ -432,13 +431,25 @@ document.addEventListener('DOMContentLoaded', () => {
             // Gamepad P1
             if (gamepadAssignments.p1 !== null && gamepads[gamepadAssignments.p1]) {
                 const gp = gamepads[gamepadAssignments.p1];
-                // D-Pad (Standard Mapping: 12=Up, 13=Down, 14=Left, 15=Right)
-                if (gp.buttons[12]?.pressed) throttle = 1;
-                if (gp.buttons[13]?.pressed) throttle = -1;
-                if (gp.buttons[14]?.pressed) steer = -1;
-                if (gp.buttons[15]?.pressed) steer = 1;
-                // Face Buttons (Shoot)
-                if (gp.buttons[0]?.pressed || gp.buttons[1]?.pressed || gp.buttons[2]?.pressed || gp.buttons[3]?.pressed) shoot = true;
+                const deadzone = 0.2;
+
+                // Steering: Left Stick X (Axis 0) or D-Pad
+                if (Math.abs(gp.axes[0]) > deadzone) steer = gp.axes[0];
+                else if (gp.buttons[14]?.pressed) steer = -1; 
+                else if (gp.buttons[15]?.pressed) steer = 1;
+
+                // Throttle: A (Button 0) or D-Pad Up
+                if (gp.buttons[0]?.pressed) throttle = 1;
+                else if (gp.buttons[12]?.pressed) throttle = 1;
+
+                // Reverse: D-Pad Down or Left Stick Down (Axis 1)
+                if (gp.buttons[13]?.pressed || gp.axes[1] > 0.5) throttle = -1;
+
+                // Shoot: B(1), X(2), Y(3), RB(5), RT(7)
+                if (gp.buttons[1]?.pressed || gp.buttons[2]?.pressed || gp.buttons[3]?.pressed ||
+                    gp.buttons[5]?.pressed || (gp.buttons[7] && (gp.buttons[7].pressed || gp.buttons[7].value > 0.5))) {
+                    shoot = true;
+                }
             }
             
             player1.drive(throttle, steer);
@@ -460,13 +471,25 @@ document.addEventListener('DOMContentLoaded', () => {
             // Gamepad P2
             if (gamepadAssignments.p2 !== null && gamepads[gamepadAssignments.p2]) {
                 const gp = gamepads[gamepadAssignments.p2];
-                // D-Pad
-                if (gp.buttons[12]?.pressed) throttle = 1;
-                if (gp.buttons[13]?.pressed) throttle = -1;
-                if (gp.buttons[14]?.pressed) steer = -1;
-                if (gp.buttons[15]?.pressed) steer = 1;
-                // Face Buttons
-                if (gp.buttons[0]?.pressed || gp.buttons[1]?.pressed || gp.buttons[2]?.pressed || gp.buttons[3]?.pressed) shoot = true;
+                const deadzone = 0.2;
+
+                // Steering
+                if (Math.abs(gp.axes[0]) > deadzone) steer = gp.axes[0];
+                else if (gp.buttons[14]?.pressed) steer = -1;
+                else if (gp.buttons[15]?.pressed) steer = 1;
+
+                // Throttle
+                if (gp.buttons[0]?.pressed) throttle = 1;
+                else if (gp.buttons[12]?.pressed) throttle = 1;
+
+                // Reverse
+                if (gp.buttons[13]?.pressed || gp.axes[1] > 0.5) throttle = -1;
+
+                // Shoot: B, X, Y, RB, RT
+                if (gp.buttons[1]?.pressed || gp.buttons[2]?.pressed || gp.buttons[3]?.pressed ||
+                    gp.buttons[5]?.pressed || (gp.buttons[7] && (gp.buttons[7].pressed || gp.buttons[7].value > 0.5))) {
+                    shoot = true;
+                }
             }
             
             player2.drive(throttle, steer);
