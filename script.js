@@ -14,6 +14,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- State Variables ---
     let isPaused = false;
     let loadedTextures = [];
+    
+    // Track assigned gamepad indices
+    let gamepadAssignments = { p1: null, p2: null }; 
+
     let gameParams = {
         playerSpeed: 100, // High speed
         enemySpeed: 70,   // Faster enemies
@@ -392,33 +396,81 @@ document.addEventListener('DOMContentLoaded', () => {
         // Using variable iterations based on Lite Physics Toggle
         world.step(TIME_STEP, velIter, posIter);
 
-        // 3. Player Control
+        // 3. Player Control & Gamepad Handling
+        const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+
+        // Logic: Allow players to "Join" by pressing face buttons (0,1,2,3)
+        for (let i = 0; i < gamepads.length; i++) {
+            const gp = gamepads[i];
+            if (gp) {
+                // Check if any face button is pressed to join
+                const btnPressed = gp.buttons.some((b, idx) => idx < 4 && b.pressed);
+                if (btnPressed) {
+                    if (gamepadAssignments.p1 === null && gamepadAssignments.p2 !== gp.index) {
+                        gamepadAssignments.p1 = gp.index;
+                        console.log(`Gamepad ${i} assigned to P1`);
+                    } else if (gamepadAssignments.p2 === null && gamepadAssignments.p1 !== gp.index) {
+                        gamepadAssignments.p2 = gp.index;
+                        console.log(`Gamepad ${i} assigned to P2`);
+                    }
+                }
+            }
+        }
+
         if (player1) {
             let throttle = 0;
             let steer = 0;
+            let shoot = false;
+
+            // Keyboard P1
             if (keys['arrowup']) throttle = 1;
             if (keys['arrowdown']) throttle = -1;
-            
-            // Inverted Turn Logic
             if (keys['arrowleft']) steer = -1; 
             if (keys['arrowright']) steer = 1;
+            if (keys[' ']) shoot = true;
+
+            // Gamepad P1
+            if (gamepadAssignments.p1 !== null && gamepads[gamepadAssignments.p1]) {
+                const gp = gamepads[gamepadAssignments.p1];
+                // D-Pad (Standard Mapping: 12=Up, 13=Down, 14=Left, 15=Right)
+                if (gp.buttons[12]?.pressed) throttle = 1;
+                if (gp.buttons[13]?.pressed) throttle = -1;
+                if (gp.buttons[14]?.pressed) steer = -1;
+                if (gp.buttons[15]?.pressed) steer = 1;
+                // Face Buttons (Shoot)
+                if (gp.buttons[0]?.pressed || gp.buttons[1]?.pressed || gp.buttons[2]?.pressed || gp.buttons[3]?.pressed) shoot = true;
+            }
             
             player1.drive(throttle, steer);
-            if (keys[' ']) player1.shoot();
+            if (shoot) player1.shoot();
         }
 
         if (player2) {
             let throttle = 0;
             let steer = 0;
+            let shoot = false;
+
+            // Keyboard P2
             if (keys['w']) throttle = 1;
             if (keys['s']) throttle = -1;
-            
-            // Inverted Turn Logic
             if (keys['a']) steer = -1;
             if (keys['d']) steer = 1;
+            if (keys['f']) shoot = true;
+
+            // Gamepad P2
+            if (gamepadAssignments.p2 !== null && gamepads[gamepadAssignments.p2]) {
+                const gp = gamepads[gamepadAssignments.p2];
+                // D-Pad
+                if (gp.buttons[12]?.pressed) throttle = 1;
+                if (gp.buttons[13]?.pressed) throttle = -1;
+                if (gp.buttons[14]?.pressed) steer = -1;
+                if (gp.buttons[15]?.pressed) steer = 1;
+                // Face Buttons
+                if (gp.buttons[0]?.pressed || gp.buttons[1]?.pressed || gp.buttons[2]?.pressed || gp.buttons[3]?.pressed) shoot = true;
+            }
             
             player2.drive(throttle, steer);
-            if (keys['f']) player2.shoot();
+            if (shoot) player2.shoot();
         }
 
         // 4. Update Entities & Camera
