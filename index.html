@@ -67,27 +67,23 @@
         <div id="customizeMenu" class="menu-overlay hidden">
             <h2>Customize & Optimize</h2>
             
-            <!-- Graphics & Performance Settings -->
+            <!-- Graphics & Optimization -->
             <div class="setting-group">
                 <h3>Graphics & Optimization</h3>
                 <div class="setting-row">
                     <label>Shadows (GPU):</label>
-                    <!-- Default: Checked (On) -->
                     <input type="checkbox" id="shadowsToggle" checked>
                 </div>
                 <div class="setting-row">
                     <label>Low Res (GPU):</label>
-                    <!-- Default: Checked (On) for optimization -->
                     <input type="checkbox" id="lowResToggle" checked>
                 </div>
                 <div class="setting-row">
                     <label>Lite Physics (CPU):</label>
-                    <!-- Default: Checked (On) for optimization -->
                     <input type="checkbox" id="litePhysicsToggle" checked>
                 </div>
                 <div class="setting-row">
                     <label>Simple Materials (Fast):</label>
-                    <!-- New Optimization -->
                     <input type="checkbox" id="simpleMatToggle">
                 </div>
                 <div class="setting-row">
@@ -96,7 +92,30 @@
                 </div>
             </div>
 
-            <!-- Physics Settings -->
+            <!-- Camera Settings -->
+            <div class="setting-group">
+                <h3>Camera</h3>
+                <div class="setting-row">
+                    <label>Top Down View:</label>
+                    <input type="checkbox" id="topDownToggle">
+                </div>
+                <div class="setting-row">
+                    <label>Rotate w/ Car:</label>
+                    <input type="checkbox" id="camRotateToggle">
+                </div>
+                <div class="setting-row">
+                    <label>Height:</label>
+                    <input type="range" id="camHeightSlider" min="20" max="150" step="5" value="60">
+                    <span class="slider-value" id="camHeightValue">60</span>
+                </div>
+                <div class="setting-row">
+                    <label>FOV:</label>
+                    <input type="range" id="fovSlider" min="30" max="120" step="1" value="50">
+                    <span class="slider-value" id="fovValue">50</span>
+                </div>
+            </div>
+
+            <!-- Gameplay Settings -->
             <div class="setting-group">
                 <h3>Gameplay</h3>
                 <div class="setting-row">

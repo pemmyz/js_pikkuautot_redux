@@ -26,8 +26,13 @@ document.addEventListener('DOMContentLoaded', () => {
         turnSpeed: 2.5,  
         drift: 0.85,
         trafficCount: 20,
-        simpleMaterials: false, // Updated by toggle
-        particlesEnabled: true  // Updated by toggle
+        simpleMaterials: false, 
+        particlesEnabled: true,
+        // Camera Params
+        cameraHeight: 60,
+        cameraFOV: 50,
+        topDownMode: false,
+        cameraRotate: false // Default: Fixed North-Up
     };
     
     let p1Score = 0;
@@ -41,12 +46,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- THREE.JS Setup ---
     const container = document.getElementById('canvas-container');
-    const renderer = new THREE.WebGLRenderer({ antialias: true }); // Antialias on by default, can be heavy
+    const renderer = new THREE.WebGLRenderer({ antialias: true }); 
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     
-    // Apply Low Res Default
+    // Default: Low Res applied
     if (document.getElementById('lowResToggle').checked) {
         renderer.setPixelRatio(0.5);
     } else {
@@ -59,12 +64,10 @@ document.addEventListener('DOMContentLoaded', () => {
     scene.background = new THREE.Color(0x222222);
     scene.fog = new THREE.Fog(0x222222, 50, 150);
 
-    // Camera (Will follow P1)
-    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 60, 30); 
+    const camera = new THREE.PerspectiveCamera(gameParams.cameraFOV, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, gameParams.cameraHeight, 30); 
     camera.lookAt(0, 0, 0);
 
-    // Lighting
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
     scene.add(ambientLight);
 
@@ -112,7 +115,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     loadedTextures.push(tex); 
                     resolve(); 
                 }, undefined, () => {
-                    // Fallback
                     const c = document.createElement('canvas'); c.width=64; c.height=128;
                     const ctx = c.getContext('2d');
                     ctx.fillStyle = `hsl(${i*40},70%,50%)`; ctx.fillRect(0,0,64,128);
@@ -128,7 +130,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return Promise.all(promises);
     }
 
-    // --- Helper for "Car" Physics ---
     function getLateralVelocity(body) {
         const currentRightNormal = body.getWorldVector(pl.Vec2(1, 0));
         const velocity = body.getLinearVelocity();
@@ -136,7 +137,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return currentRightNormal.mul(lateralMag);
     }
 
-    // --- Classes ---
     class Entity {
         constructor(mesh, body) {
             this.mesh = mesh;
@@ -144,7 +144,6 @@ document.addEventListener('DOMContentLoaded', () => {
             this.markedForDeletion = false;
             if (mesh) scene.add(mesh);
         }
-
         update() {
             if (!this.body || !this.mesh) return;
             const pos = this.body.getPosition();
@@ -152,7 +151,6 @@ document.addEventListener('DOMContentLoaded', () => {
             this.mesh.position.set(pos.x, 0.5, pos.y); 
             this.mesh.rotation.y = -angle; 
         }
-
         destroy() {
             if (this.mesh) {
                 scene.remove(this.mesh);
@@ -166,28 +164,21 @@ document.addEventListener('DOMContentLoaded', () => {
         constructor(x, y, isPlayer, playerIndex, texture) {
             const width = 1.8;
             const height = 3.8;
-
             const geometry = new THREE.PlaneGeometry(width, height);
             
-            // Check Simple Graphics Mode
             let material;
             if (gameParams.simpleMaterials) {
-                material = new THREE.MeshLambertMaterial({ 
-                    map: texture, transparent: true, alphaTest: 0.5 
-                });
+                material = new THREE.MeshLambertMaterial({ map: texture, transparent: true, alphaTest: 0.5 });
             } else {
-                material = new THREE.MeshStandardMaterial({ 
-                    map: texture, transparent: true, alphaTest: 0.5, roughness: 0.5 
-                });
+                material = new THREE.MeshStandardMaterial({ map: texture, transparent: true, alphaTest: 0.5, roughness: 0.5 });
             }
 
             const mesh = new THREE.Mesh(geometry, material);
             mesh.castShadow = true;
-            mesh.rotation.x = -Math.PI / 2; // Lie flat
+            mesh.rotation.x = -Math.PI / 2; 
             const containerMesh = new THREE.Group(); 
             containerMesh.add(mesh);
 
-            // Physics
             const body = world.createBody({
                 type: 'dynamic',
                 position: pl.Vec2(x, y),
@@ -196,20 +187,16 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             body.createFixture(pl.Box(width / 2, height / 2), {
-                density: 2.0, 
-                friction: 0.3,
-                restitution: 0.1,
+                density: 2.0, friction: 0.3, restitution: 0.1,
                 filterCategoryBits: isPlayer ? CAT_PLAYER : CAT_ENEMY,
                 filterMaskBits: CAT_PLAYER | CAT_ENEMY | CAT_WALL | CAT_BULLET
             });
 
             super(containerMesh, body);
-            
             this.isPlayer = isPlayer;
             this.playerIndex = playerIndex;
             this.shootCooldown = 0;
             this.baseTexture = texture;
-            
             this.maxSteerAngle = Math.PI / 3;
             this.maxSpeed = isPlayer ? gameParams.playerSpeed : gameParams.enemySpeed;
             this.power = isPlayer ? 100 : 70; 
@@ -225,7 +212,6 @@ document.addEventListener('DOMContentLoaded', () => {
             this.body.applyLinearImpulse(impulse, this.body.getWorldCenter());
 
             this.body.applyAngularImpulse( -0.1 * this.body.getAngularVelocity() * this.body.getMass() );
-
             this.maxSpeed = this.isPlayer ? gameParams.playerSpeed : gameParams.enemySpeed;
         }
 
@@ -240,7 +226,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (throttle !== 0) {
                 const forwardNormal = this.body.getWorldVector(pl.Vec2(0, 1));
                 const currentSpeed = pl.Vec2.dot(this.body.getLinearVelocity(), forwardNormal);
-                
                 if (Math.abs(currentSpeed) < this.maxSpeed) {
                     const force = forwardNormal.mul(throttle * this.power);
                     this.body.applyForce(force, this.body.getWorldCenter());
@@ -252,10 +237,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (this.shootCooldown > 0) return;
             const pos = this.body.getPosition();
             const direction = this.body.getWorldVector(pl.Vec2(0, 1));
-            
             const bx = pos.x + direction.x * 3;
             const by = pos.y + direction.y * 3;
-            
             createBullet(bx, by, direction.x * 60, direction.y * 60, this.playerIndex);
             this.shootCooldown = 0.2;
         }
@@ -266,14 +249,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const mat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
         const mesh = new THREE.Mesh(geo, mat);
         
-        const body = world.createBody({
-            type: 'dynamic',
-            position: pl.Vec2(x, y),
-            bullet: true
-        });
+        const body = world.createBody({ type: 'dynamic', position: pl.Vec2(x, y), bullet: true });
         body.createFixture(pl.Circle(0.15), {
-            filterCategoryBits: CAT_BULLET,
-            filterMaskBits: CAT_ENEMY | CAT_WALL
+            filterCategoryBits: CAT_BULLET, filterMaskBits: CAT_ENEMY | CAT_WALL
         });
         body.setLinearVelocity(pl.Vec2(vx, vy));
 
@@ -290,8 +268,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function createExplosion(pos) {
-        if (!gameParams.particlesEnabled) return; // Optimization Check
-
+        if (!gameParams.particlesEnabled) return; 
         const geo = new THREE.BoxGeometry(0.4,0.4,0.4);
         const mat = new THREE.MeshBasicMaterial({ color: 0xff5500 });
         for(let i=0; i<8; i++) {
@@ -314,7 +291,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Environment Generation ---
     function createCity() {
         const planeGeo = new THREE.PlaneGeometry(400, 400);
-        // Optimization: Use Lambert for ground if Simple Materials is on
         const matType = gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial;
         const planeMat = new matType({ color: 0x333333, side: THREE.DoubleSide });
         
@@ -324,10 +300,7 @@ document.addEventListener('DOMContentLoaded', () => {
         scene.add(ground);
 
         for(let i=-200; i<200; i+=10) {
-            const mark = new THREE.Mesh(
-                new THREE.PlaneGeometry(1, 4), 
-                new THREE.MeshBasicMaterial({ color: 0xffffff })
-            );
+            const mark = new THREE.Mesh(new THREE.PlaneGeometry(1, 4), new THREE.MeshBasicMaterial({ color: 0xffffff }));
             mark.rotation.x = -Math.PI / 2;
             mark.position.set(0, 0.05, i);
             scene.add(mark);
@@ -342,20 +315,15 @@ document.addEventListener('DOMContentLoaded', () => {
             createBuildingBlock(35, z, boxGeo);
         }
         
-        // Manual roadtiles for default map traffic
         roadTiles = [];
         for(let z=-200; z<200; z+=20) {
-            roadTiles.push({x: -15, z: z});
-            roadTiles.push({x: 0, z: z});
-            roadTiles.push({x: 15, z: z});
+            roadTiles.push({x: -15, z: z}); roadTiles.push({x: 0, z: z}); roadTiles.push({x: 15, z: z});
         }
     }
 
     function createBuildingBlock(x, z, geo) {
         const h = Math.random() * 15 + 5;
         const w = Math.random() * 8 + 6;
-        
-        // Optimization: Material Switch
         const mat = gameParams.simpleMaterials 
             ? new THREE.MeshLambertMaterial({ color: Math.random() * 0xffffff })
             : new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff });
@@ -376,7 +344,6 @@ document.addEventListener('DOMContentLoaded', () => {
         body.createFixture(pl.Box(w/2, h/2), { filterCategoryBits: CAT_WALL });
     }
     
-    // --- Grid City Generation ---
     const BLOCK_SIZE = 20; 
 
     function generateMazeData(width, height) {
@@ -386,29 +353,21 @@ document.addEventListener('DOMContentLoaded', () => {
         for (let z = 0; z < height; z++) {
             let row = [];
             for (let x = 0; x < width; x++) {
-                // Outer Boundary Walls
                 if (x === 0 || x === width - 1 || z === 0 || z === height - 1) {
                     row.push('#');
                     continue;
                 }
-
-                // Grid Logic:
-                // Repeating Pattern X: [B, B, B, B, B, Road] -> Cycle of 6
-                // Repeating Pattern Z: [B, B, B, Road] -> Cycle of 4
-                
                 const modX = (x - 1) % 6; 
                 const modZ = (z - 1) % 4;
-
                 if (modX < 5 && modZ < 3) {
-                    row.push('#'); // Building
+                    row.push('#'); 
                 } else {
-                    row.push(' '); // Road
+                    row.push(' '); 
                 }
             }
             grid.push(row);
         }
 
-        // Convert Grid to World Coordinates
         for(let z=0; z<height; z++) {
             for(let x=0; x<width; x++) {
                 if(grid[z][x] === ' ') {
@@ -419,11 +378,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         }
-
         return { grid, roads };
     }
 
-    // --- Logic ---
     function spawnTraffic() {
         if (loadedTextures.length === 0) return;
         
@@ -456,7 +413,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // --- Collision ---
     world.on('begin-contact', (contact) => {
         const a = contact.getFixtureA().getBody();
         const b = contact.getFixtureB().getBody();
@@ -478,7 +434,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 createExplosion(target.mesh.position);
                 updateHUD();
             } else if (!target.isPlayer) {
-                bullet.markedForDeletion = true; // Hit wall
+                bullet.markedForDeletion = true; 
             }
         }
     });
@@ -488,12 +444,10 @@ document.addEventListener('DOMContentLoaded', () => {
         p2ScoreEl.innerText = `P2: ${p2Score}`;
     }
 
-    // --- Input ---
     const keys = {};
     window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
     window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
 
-    // --- Main Loop ---
     let lastTime = 0;
     function animate(time) {
         requestAnimationFrame(animate);
@@ -598,12 +552,54 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
+        // Camera Logic
         if (player1 && player1.mesh) {
+            if(camera.fov !== gameParams.cameraFOV) {
+                camera.fov = gameParams.cameraFOV;
+                camera.updateProjectionMatrix();
+            }
+
             const targetX = player1.mesh.position.x;
-            const targetZ = player1.mesh.position.z + 20; 
-            camera.position.x += (targetX - camera.position.x) * 0.1;
-            camera.position.z += (targetZ - camera.position.z) * 0.1;
-            camera.lookAt(targetX, 0, targetZ - 30);
+            // Determine horizontal offset (Behind car vs Above car)
+            const distH = gameParams.topDownMode ? 0.1 : 20; 
+            
+            let finalCamX, finalCamZ;
+
+            if (gameParams.cameraRotate) {
+                 // Rotate w/ Car: Calculate position relative to car rotation
+                 const angle = player1.body.getAngle(); // Car heading
+                 // Camera offset is 'behind' (-sin, -cos)
+                 const offsetX = -Math.sin(angle) * distH;
+                 const offsetZ = -Math.cos(angle) * distH;
+                 
+                 finalCamX = targetX + offsetX;
+                 finalCamZ = player1.mesh.position.z + offsetZ;
+                 
+                 // If top down & rotate, Up vector must align with car forward
+                 if(gameParams.topDownMode) {
+                     camera.up.set(Math.sin(angle), 0, Math.cos(angle));
+                 } else {
+                     camera.up.set(0,1,0);
+                 }
+            } else {
+                 // Fixed: Camera stays at World Z offset
+                 finalCamX = targetX;
+                 finalCamZ = player1.mesh.position.z + distH;
+                 
+                 // If top down & fixed, Up vector is North (-Z) to match map style
+                 if(gameParams.topDownMode) {
+                     camera.up.set(0,0,-1);
+                 } else {
+                     camera.up.set(0,1,0);
+                 }
+            }
+
+            // Interpolate Position
+            camera.position.x += (finalCamX - camera.position.x) * 0.1;
+            camera.position.z += (finalCamZ - camera.position.z) * 0.1;
+            camera.position.y += (gameParams.cameraHeight - camera.position.y) * 0.1;
+
+            camera.lookAt(targetX, 0, player1.mesh.position.z);
             
             dirLight.position.x = player1.mesh.position.x + 50;
             dirLight.position.z = player1.mesh.position.z + 50;
@@ -618,7 +614,6 @@ document.addEventListener('DOMContentLoaded', () => {
     window.startGameWithMap = function(type) {
         currentMapType = type;
         
-        // Ensure optimizations are read from current state (defaults applied on load)
         gameParams.simpleMaterials = document.getElementById('simpleMatToggle').checked;
         gameParams.particlesEnabled = document.getElementById('particlesToggle').checked;
         if(document.getElementById('litePhysicsToggle').checked) { velIter = 2; posIter = 1; }
@@ -649,7 +644,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const wallOffX = w * BLOCK_SIZE / 2;
                 const wallOffZ = h * BLOCK_SIZE / 2;
                 
-                // Ground material depends on setting
                 const matType = gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial;
                 const pg = new THREE.PlaneGeometry(w*BLOCK_SIZE*1.2, h*BLOCK_SIZE*1.2);
                 const pm = new matType({ color: 0x222222 });
@@ -661,7 +655,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     for (let x = 0; x < w; x++) {
                         if (mapGrid[z][x] === '#') {
                             const height = Math.random() * 25 + 5;
-                            // Building material depends on setting
                             const bMat = gameParams.simpleMaterials 
                                 ? new THREE.MeshLambertMaterial({ color: 0x444444 })
                                 : new THREE.MeshStandardMaterial({ color: 0x444444 });
@@ -745,14 +738,31 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     
-    // New Optimization Listeners
     document.getElementById('simpleMatToggle').addEventListener('change', (e) => {
         gameParams.simpleMaterials = e.target.checked;
-        // Requires restart to fully apply to buildings, but we set flag
     });
     
     document.getElementById('particlesToggle').addEventListener('change', (e) => {
         gameParams.particlesEnabled = e.target.checked;
+    });
+
+    // Camera Listeners
+    document.getElementById('topDownToggle').addEventListener('change', (e) => {
+        gameParams.topDownMode = e.target.checked;
+    });
+    
+    document.getElementById('camRotateToggle').addEventListener('change', (e) => {
+        gameParams.cameraRotate = e.target.checked;
+    });
+    
+    document.getElementById('camHeightSlider').addEventListener('input', (e) => {
+        gameParams.cameraHeight = parseInt(e.target.value);
+        document.getElementById('camHeightValue').innerText = e.target.value;
+    });
+    
+    document.getElementById('fovSlider').addEventListener('input', (e) => {
+        gameParams.cameraFOV = parseInt(e.target.value);
+        document.getElementById('fovValue').innerText = e.target.value;
     });
 
     const updateSlider = (id, paramKey, displayId) => {

@@ -87,6 +87,8 @@ button:hover { background: #555; }
     min-width: 320px;
     text-align: center;
     box-shadow: 0 0 30px rgba(0,0,0,0.8);
+    max-height: 90vh;
+    overflow-y: auto;
 }
 .menu-overlay.hidden { display: none; }
 
