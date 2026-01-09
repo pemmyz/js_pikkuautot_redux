@@ -20,11 +20,11 @@ body {
     display: block;
 }
 
-canvas {
-    display: block; /* Removes bottom whitespace */
-}
+canvas { display: block; }
 
 /* Header & HUD */
+#gameHeader.hidden, #hud.hidden { display: none; }
+
 #gameHeader {
     position: absolute;
     top: 0;
@@ -43,7 +43,7 @@ canvas {
 h1 {
     margin: 0;
     text-shadow: 2px 2px 0px #000;
-    color: #ffcc00; /* GTA logo color vibe */
+    color: #ffcc00; 
     font-style: italic;
     font-size: 2.5em;
 }
@@ -65,6 +65,14 @@ button {
 }
 button:hover { background: #555; }
 
+.button-group {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 10px;
+    margin-bottom: 20px;
+}
+
 /* Menus */
 .menu-overlay {
     position: absolute;
@@ -81,8 +89,20 @@ button:hover { background: #555; }
     box-shadow: 0 0 30px rgba(0,0,0,0.8);
 }
 .menu-overlay.hidden { display: none; }
+
+.setting-group {
+    background: rgba(255,255,255,0.05);
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 10px;
+}
+.setting-group h3 { margin: 0 0 5px 0; font-size: 1rem; color: #ffcc00; }
+
 .setting-row { display: flex; justify-content: space-between; margin: 10px 0; align-items: center; }
 .slider-value { width: 30px; text-align: right; color: #ffcc00; }
+
+.section { margin-bottom: 15px; border-bottom: 1px solid #444; }
+.section p { color: #aaa; margin: 5px 0; font-weight: bold;}
 
 /* HUD */
 #hud {
