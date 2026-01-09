@@ -7,9 +7,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const pl = planck;
     const TIME_STEP = 1 / 60;
     
-    // Dynamic physics iterations for optimization
-    let velIter = 8;
-    let posIter = 3;
+    // Dynamic physics iterations for optimization (Set by Lite Physics default)
+    let velIter = 2; // Default Low
+    let posIter = 1; // Default Low
 
     // --- State Variables ---
     let isPaused = false;
@@ -21,11 +21,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let gamepadAssignments = { p1: null, p2: null }; 
 
     let gameParams = {
-        playerSpeed: 100, // High speed
-        enemySpeed: 70,   // Faster enemies
+        playerSpeed: 100,
+        enemySpeed: 70, 
         turnSpeed: 2.5,  
         drift: 0.85,
-        trafficCount: 20     
+        trafficCount: 20,
+        simpleMaterials: false, // Updated by toggle
+        particlesEnabled: true  // Updated by toggle
     };
     
     let p1Score = 0;
@@ -39,10 +41,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- THREE.JS Setup ---
     const container = document.getElementById('canvas-container');
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true }); // Antialias on by default, can be heavy
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    
+    // Apply Low Res Default
+    if (document.getElementById('lowResToggle').checked) {
+        renderer.setPixelRatio(0.5);
+    } else {
+        renderer.setPixelRatio(window.devicePixelRatio);
+    }
+    
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
@@ -51,12 +61,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Camera (Will follow P1)
     const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
-    // RESTORED: Camera Position
     camera.position.set(0, 60, 30); 
     camera.lookAt(0, 0, 0);
 
     // Lighting
-    // RESTORED: Specific lighting settings
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
     scene.add(ambientLight);
 
@@ -156,15 +164,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     class Car extends Entity {
         constructor(x, y, isPlayer, playerIndex, texture) {
-            // RESTORED: Car Dimensions
             const width = 1.8;
             const height = 3.8;
 
-            // RESTORED: PlaneGeometry (2D Sprite style)
             const geometry = new THREE.PlaneGeometry(width, height);
-            const material = new THREE.MeshStandardMaterial({ 
-                map: texture, transparent: true, alphaTest: 0.5, roughness: 0.5 
-            });
+            
+            // Check Simple Graphics Mode
+            let material;
+            if (gameParams.simpleMaterials) {
+                material = new THREE.MeshLambertMaterial({ 
+                    map: texture, transparent: true, alphaTest: 0.5 
+                });
+            } else {
+                material = new THREE.MeshStandardMaterial({ 
+                    map: texture, transparent: true, alphaTest: 0.5, roughness: 0.5 
+                });
+            }
+
             const mesh = new THREE.Mesh(geometry, material);
             mesh.castShadow = true;
             mesh.rotation.x = -Math.PI / 2; // Lie flat
@@ -194,10 +210,8 @@ document.addEventListener('DOMContentLoaded', () => {
             this.shootCooldown = 0;
             this.baseTexture = texture;
             
-            // Physics Props
             this.maxSteerAngle = Math.PI / 3;
             this.maxSpeed = isPlayer ? gameParams.playerSpeed : gameParams.enemySpeed;
-            // High power for fast acceleration
             this.power = isPlayer ? 100 : 70; 
         }
 
@@ -205,23 +219,17 @@ document.addEventListener('DOMContentLoaded', () => {
             super.update();
             if (this.shootCooldown > 0) this.shootCooldown -= dt;
             
-            // 1. Kill Lateral Velocity (The "Tire" effect)
             const lateralVel = getLateralVelocity(this.body);
             const driftFactor = this.isPlayer ? gameParams.drift : 1.0; 
             const impulse = lateralVel.neg().mul(this.body.getMass() * driftFactor);
             this.body.applyLinearImpulse(impulse, this.body.getWorldCenter());
 
-            // 2. Angular Friction
             this.body.applyAngularImpulse( -0.1 * this.body.getAngularVelocity() * this.body.getMass() );
 
-            // 3. Update Max Speed dynamically from slider
             this.maxSpeed = this.isPlayer ? gameParams.playerSpeed : gameParams.enemySpeed;
-
-            // 4. Cleanup logic (Despawn handled by updateTraffic now)
         }
 
         drive(throttle, steer) {
-            // Steering
             if (steer !== 0) {
                 const turnForce = gameParams.turnSpeed * (throttle < 0 ? 1 : -1); 
                 this.body.setAngularVelocity(steer * -turnForce);
@@ -229,12 +237,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.body.setAngularVelocity(0);
             }
 
-            // Acceleration
             if (throttle !== 0) {
                 const forwardNormal = this.body.getWorldVector(pl.Vec2(0, 1));
                 const currentSpeed = pl.Vec2.dot(this.body.getLinearVelocity(), forwardNormal);
                 
-                // Cap max speed
                 if (Math.abs(currentSpeed) < this.maxSpeed) {
                     const force = forwardNormal.mul(throttle * this.power);
                     this.body.applyForce(force, this.body.getWorldCenter());
@@ -284,6 +290,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function createExplosion(pos) {
+        if (!gameParams.particlesEnabled) return; // Optimization Check
+
         const geo = new THREE.BoxGeometry(0.4,0.4,0.4);
         const mat = new THREE.MeshBasicMaterial({ color: 0xff5500 });
         for(let i=0; i<8; i++) {
@@ -303,19 +311,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // --- Environment Generation (Restored) ---
-    
-    // RESTORED: Specific createCity logic from snippet
+    // --- Environment Generation ---
     function createCity() {
-        // Ground
         const planeGeo = new THREE.PlaneGeometry(400, 400);
-        const planeMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9 });
+        // Optimization: Use Lambert for ground if Simple Materials is on
+        const matType = gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial;
+        const planeMat = new matType({ color: 0x333333, side: THREE.DoubleSide });
+        
         const ground = new THREE.Mesh(planeGeo, planeMat);
         ground.rotation.x = -Math.PI / 2;
         ground.receiveShadow = true;
         scene.add(ground);
 
-        // Road Lines
         for(let i=-200; i<200; i+=10) {
             const mark = new THREE.Mesh(
                 new THREE.PlaneGeometry(1, 4), 
@@ -335,7 +342,7 @@ document.addEventListener('DOMContentLoaded', () => {
             createBuildingBlock(35, z, boxGeo);
         }
         
-        // Define Road Tiles manually for this static map so traffic logic works
+        // Manual roadtiles for default map traffic
         roadTiles = [];
         for(let z=-200; z<200; z+=20) {
             roadTiles.push({x: -15, z: z});
@@ -347,7 +354,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function createBuildingBlock(x, z, geo) {
         const h = Math.random() * 15 + 5;
         const w = Math.random() * 8 + 6;
-        const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff }));
+        
+        // Optimization: Material Switch
+        const mat = gameParams.simpleMaterials 
+            ? new THREE.MeshLambertMaterial({ color: Math.random() * 0xffffff })
+            : new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff });
+
+        const mesh = new THREE.Mesh(geo, mat);
         mesh.position.set(x, h/2, z);
         mesh.scale.set(w, h, w);
         mesh.castShadow = true;
@@ -363,62 +376,39 @@ document.addEventListener('DOMContentLoaded', () => {
         body.createFixture(pl.Box(w/2, h/2), { filterCategoryBits: CAT_WALL });
     }
     
-    // --- Maze Generation for other modes ---
+    // --- Grid City Generation ---
     const BLOCK_SIZE = 20; 
-    class Rect {
-        constructor(x, y, w, h) {
-            this.x1 = x; this.y1 = y;
-            this.x2 = x + w; this.y2 = y + h;
-            this.center = [Math.floor((this.x1 + this.x2) / 2), Math.floor((this.y1 + this.y2) / 2)];
-        }
-        intersect(other) {
-            return (this.x1 < other.x2 + 1 && this.x2 > other.x1 - 1 &&
-                    this.y1 < other.y2 + 1 && this.y2 > other.y1 - 1);
-        }
-    }
 
     function generateMazeData(width, height) {
         let grid = [];
-        for (let i = 0; i < height; i++) {
+        let roads = [];
+
+        for (let z = 0; z < height; z++) {
             let row = [];
-            for (let j = 0; j < width; j++) row.push('#');
+            for (let x = 0; x < width; x++) {
+                // Outer Boundary Walls
+                if (x === 0 || x === width - 1 || z === 0 || z === height - 1) {
+                    row.push('#');
+                    continue;
+                }
+
+                // Grid Logic:
+                // Repeating Pattern X: [B, B, B, B, B, Road] -> Cycle of 6
+                // Repeating Pattern Z: [B, B, B, Road] -> Cycle of 4
+                
+                const modX = (x - 1) % 6; 
+                const modZ = (z - 1) % 4;
+
+                if (modX < 5 && modZ < 3) {
+                    row.push('#'); // Building
+                } else {
+                    row.push(' '); // Road
+                }
+            }
             grid.push(row);
         }
-        let rooms = [];
-        const maxRooms = Math.floor((width * height) / 50);
-        const roomMin = 3, roomMax = 8;
-        for (let r = 0; r < maxRooms; r++) {
-            let w = Math.floor(Math.random() * (roomMax - roomMin + 1)) + roomMin;
-            let h = Math.floor(Math.random() * (roomMax - roomMin + 1)) + roomMin;
-            let x = Math.floor(Math.random() * ((width - w - 1) / 2)) * 2 + 1;
-            let y = Math.floor(Math.random() * ((height - h - 1) / 2)) * 2 + 1;
-            let newRoom = new Rect(x, y, w, h);
-            let failed = false;
-            for (let other of rooms) {
-                if (newRoom.intersect(other)) { failed = true; break; }
-            }
-            if (!failed) {
-                for (let i = newRoom.y1; i < newRoom.y2; i++) {
-                    for (let j = newRoom.x1; j < newRoom.x2; j++) {
-                        if (i > 0 && i < height-1 && j > 0 && j < width-1) grid[i][j] = ' ';
-                    }
-                }
-                if (rooms.length > 0) {
-                    let [prevX, prevY] = rooms[rooms.length - 1].center;
-                    let [newX, newY] = newRoom.center;
-                    for (let xCorr = Math.min(prevX, newX); xCorr <= Math.max(prevX, newX); xCorr++) {
-                        grid[prevY][xCorr] = ' ';
-                        if(prevY+1 < height) grid[prevY+1][xCorr] = ' ';
-                    }
-                    for (let yCorr = Math.min(prevY, newY); yCorr <= Math.max(prevY, newY); yCorr++) {
-                        grid[yCorr][newX] = ' ';
-                        if(newX+1 < width) grid[yCorr][newX+1] = ' ';
-                    }
-                }
-                rooms.push(newRoom);
-            }
-        }
-        let roads = [];
+
+        // Convert Grid to World Coordinates
         for(let z=0; z<height; z++) {
             for(let x=0; x<width; x++) {
                 if(grid[z][x] === ' ') {
@@ -429,6 +419,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         }
+
         return { grid, roads };
     }
 
@@ -444,7 +435,6 @@ document.addEventListener('DOMContentLoaded', () => {
              if (currentMapType === 'default') {
                  const laneX = (Math.random() * 30) - 15;
                  const p1Z = player1 ? player1.body.getPosition().y : 0;
-                 // Spawn mostly ahead
                  z = p1Z + 60 + (Math.random() * 100);
                  x = laneX;
              } else {
@@ -454,7 +444,6 @@ document.addEventListener('DOMContentLoaded', () => {
                  z = spot.z;
              }
              
-             // Random orientation (mostly opposite flow)
              angle = (Math.random() > 0.5) ? Math.PI : 0;
 
              const car = new Car(x, z, false, 0, tex);
@@ -482,7 +471,6 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if(target instanceof Car && !target.isPlayer) {
                 bullet.markedForDeletion = true;
-                // Move offscreen to recycle
                 target.body.setPosition(pl.Vec2(9999, 9999));
                 
                 if(bullet.owner === 1) p1Score += 100;
@@ -514,28 +502,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!gameActive || isPaused) return;
 
-        // 1. Spawning
         if (Math.random() < 0.05) spawnTraffic();
 
-        // 2. Physics
         world.step(TIME_STEP, velIter, posIter);
 
-        // 3. Player Control & Gamepad Handling
         const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
 
-        // Logic: Allow players to "Join" by pressing face buttons (0,1,2,3)
         for (let i = 0; i < gamepads.length; i++) {
             const gp = gamepads[i];
             if (gp) {
-                // Check if any face button is pressed to join
                 const btnPressed = gp.buttons.some((b, idx) => idx < 4 && b.pressed);
                 if (btnPressed) {
                     if (gamepadAssignments.p1 === null && gamepadAssignments.p2 !== gp.index) {
                         gamepadAssignments.p1 = gp.index;
-                        console.log(`Gamepad ${i} assigned to P1`);
                     } else if (gamepadAssignments.p2 === null && gamepadAssignments.p1 !== gp.index) {
                         gamepadAssignments.p2 = gp.index;
-                        console.log(`Gamepad ${i} assigned to P2`);
                     }
                 }
             }
@@ -545,15 +526,9 @@ document.addEventListener('DOMContentLoaded', () => {
             let throttle = 0;
             let steer = 0;
             let shoot = false;
-
-            // Keyboard P1
-            if (keys['arrowup']) throttle = 1;
-            if (keys['arrowdown']) throttle = -1;
-            if (keys['arrowleft']) steer = -1; 
-            if (keys['arrowright']) steer = 1;
+            if (keys['arrowup']) throttle = 1; if (keys['arrowdown']) throttle = -1;
+            if (keys['arrowleft']) steer = -1; if (keys['arrowright']) steer = 1;
             if (keys[' ']) shoot = true;
-
-            // Gamepad P1
             if (gamepadAssignments.p1 !== null && gamepads[gamepadAssignments.p1]) {
                 const gp = gamepads[gamepadAssignments.p1];
                 if (Math.abs(gp.axes[0]) > 0.2) steer = gp.axes[0];
@@ -569,11 +544,9 @@ document.addEventListener('DOMContentLoaded', () => {
             let throttle = 0;
             let steer = 0;
             let shoot = false;
-            // Keyboard P2
             if (keys['w']) throttle = 1; if (keys['s']) throttle = -1;
             if (keys['a']) steer = -1; if (keys['d']) steer = 1;
             if (keys['f']) shoot = true;
-            // Gamepad P2
             if (gamepadAssignments.p2 !== null && gamepads[gamepadAssignments.p2]) {
                 const gp = gamepads[gamepadAssignments.p2];
                 if (Math.abs(gp.axes[0]) > 0.2) steer = gp.axes[0];
@@ -584,23 +557,18 @@ document.addEventListener('DOMContentLoaded', () => {
             if (shoot) player2.shoot();
         }
 
-        // 4. Update Entities & Camera
         if(player1 && player1.body) {
              const p1Pos = player1.body.getPosition();
-             // Traffic Update Logic (Bottom to Top Recycling)
              const viewDist = 180;
              const spawnDist = 140;
              trafficPool.forEach(car => {
                 car.update(dt);
                 const cPos = car.body.getPosition();
-                // Simple AI
                 car.drive(0.5, 0); 
                 if(Math.random()<0.01) car.body.setAngularVelocity((Math.random()-0.5));
                 
                 const dist = pl.Vec2.distance(cPos, p1Pos);
                 if (dist > viewDist) {
-                    // Recycle to "Bottom" relative to player (Assuming moving North/-Z)
-                    // +Z is "behind"
                     const targetZ = p1Pos.y + spawnDist;
                     let valid = null;
                     if(currentMapType === 'default') {
@@ -621,7 +589,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         for (let i = entities.length - 1; i >= 0; i--) {
-            if(!trafficPool.includes(entities[i])) entities[i].update(dt); // Cars updated above
+            if(!trafficPool.includes(entities[i])) entities[i].update(dt);
             if (entities[i].markedForDeletion) {
                 entities[i].destroy();
                 entities.splice(i, 1);
@@ -630,16 +598,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        // RESTORED: Specific Camera Follow Logic
         if (player1 && player1.mesh) {
             const targetX = player1.mesh.position.x;
             const targetZ = player1.mesh.position.z + 20; 
-            
             camera.position.x += (targetX - camera.position.x) * 0.1;
             camera.position.z += (targetZ - camera.position.z) * 0.1;
             camera.lookAt(targetX, 0, targetZ - 30);
             
-            // Light follows P1
             dirLight.position.x = player1.mesh.position.x + 50;
             dirLight.position.z = player1.mesh.position.z + 50;
             dirLight.target.position.set(player1.mesh.position.x, 0, player1.mesh.position.z);
@@ -652,6 +617,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Start ---
     window.startGameWithMap = function(type) {
         currentMapType = type;
+        
+        // Ensure optimizations are read from current state (defaults applied on load)
+        gameParams.simpleMaterials = document.getElementById('simpleMatToggle').checked;
+        gameParams.particlesEnabled = document.getElementById('particlesToggle').checked;
+        if(document.getElementById('litePhysicsToggle').checked) { velIter = 2; posIter = 1; }
+        
         document.getElementById('startScreen').classList.add('hidden');
         document.getElementById('customizeMenu').classList.add('hidden');
         document.getElementById('gameHeader').classList.remove('hidden');
@@ -663,15 +634,9 @@ document.addEventListener('DOMContentLoaded', () => {
             entities = [];
             trafficPool = [];
             
-            // Re-init graphics if needed (resolution settings)
-            if(document.getElementById('lowResToggle').checked) renderer.setPixelRatio(0.5);
-            else renderer.setPixelRatio(window.devicePixelRatio);
-            
-            // Build World
             if(type === 'default') {
-                createCity(); // The RESTORED function
+                createCity();
             } else {
-                // Maze logic
                 let w=20, h=20;
                 if(type === 'medium') {w=40; h=40;}
                 if(type === 'large') {w=60; h=60;}
@@ -680,12 +645,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 mapGrid = data.grid;
                 roadTiles = data.roads;
                 
-                // Build Maze Visuals
                 const boxGeo = new THREE.BoxGeometry(1,1,1);
                 const wallOffX = w * BLOCK_SIZE / 2;
                 const wallOffZ = h * BLOCK_SIZE / 2;
+                
+                // Ground material depends on setting
+                const matType = gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial;
                 const pg = new THREE.PlaneGeometry(w*BLOCK_SIZE*1.2, h*BLOCK_SIZE*1.2);
-                const pm = new THREE.MeshStandardMaterial({ color: 0x222222 });
+                const pm = new matType({ color: 0x222222 });
                 const g = new THREE.Mesh(pg, pm);
                 g.rotation.x = -Math.PI/2; g.position.y = -0.1;
                 scene.add(g);
@@ -694,7 +661,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     for (let x = 0; x < w; x++) {
                         if (mapGrid[z][x] === '#') {
                             const height = Math.random() * 25 + 5;
-                            const mesh = new THREE.Mesh(boxGeo, new THREE.MeshStandardMaterial({ color: 0x444444 }));
+                            // Building material depends on setting
+                            const bMat = gameParams.simpleMaterials 
+                                ? new THREE.MeshLambertMaterial({ color: 0x444444 })
+                                : new THREE.MeshStandardMaterial({ color: 0x444444 });
+                                
+                            const mesh = new THREE.Mesh(boxGeo, bMat);
                             mesh.scale.set(BLOCK_SIZE, height, BLOCK_SIZE);
                             const wx = (x * BLOCK_SIZE) - wallOffX;
                             const wz = (z * BLOCK_SIZE) - wallOffZ;
@@ -708,7 +680,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            // Spawn Players
             let sx = 5, sz = 0;
             if(type !== 'default' && roadTiles.length > 0) {
                  const s = roadTiles[Math.floor(roadTiles.length/2)];
@@ -752,7 +723,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key.toLowerCase() === 'h') toggleMenu(helpMenu);
     });
 
-    // Graphics Toggles
     document.getElementById('shadowsToggle').addEventListener('change', (e) => {
         dirLight.castShadow = e.target.checked;
         renderer.shadowMap.autoUpdate = e.target.checked;
@@ -767,13 +737,22 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Physics Optimization Toggle
     document.getElementById('litePhysicsToggle').addEventListener('change', (e) => {
         if (e.target.checked) {
             velIter = 2; posIter = 1;
         } else {
             velIter = 8; posIter = 3;
         }
+    });
+    
+    // New Optimization Listeners
+    document.getElementById('simpleMatToggle').addEventListener('change', (e) => {
+        gameParams.simpleMaterials = e.target.checked;
+        // Requires restart to fully apply to buildings, but we set flag
+    });
+    
+    document.getElementById('particlesToggle').addEventListener('change', (e) => {
+        gameParams.particlesEnabled = e.target.checked;
     });
 
     const updateSlider = (id, paramKey, displayId) => {
