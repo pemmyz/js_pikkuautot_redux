@@ -9,6 +9,7 @@
     <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
     <!-- Planck.js (Physics) -->
     <script src="https://unpkg.com/planck-js@0.3.31/dist/planck.min.js"></script>
+    <script src="script.js" defer></script>
 </head>
 <body>
     <div id="gameContainer">
@@ -73,6 +74,10 @@
                 <div class="setting-row">
                     <label>Shadows (GPU):</label>
                     <input type="checkbox" id="shadowsToggle" checked>
+                </div>
+                <div class="setting-row">
+                    <label>Headlights (Cars):</label>
+                    <input type="checkbox" id="headlightsToggle">
                 </div>
                 <div class="setting-row">
                     <label>Low Res (GPU):</label>
@@ -148,7 +153,5 @@
             <div id="p2Score">P2 Score: 0</div>
         </div>
     </div>
-
-    <script src="script.js" defer></script>
 </body>
 </html>

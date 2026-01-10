@@ -28,11 +28,12 @@ document.addEventListener('DOMContentLoaded', () => {
         trafficCount: 20,
         simpleMaterials: false, 
         particlesEnabled: true,
+        headlightsEnabled: false, // Toggle logic
         // Camera Params
         cameraHeight: 60,
         cameraFOV: 50,
         topDownMode: false,
-        cameraRotate: false // Default: Fixed North-Up
+        cameraRotate: false 
     };
     
     let p1Score = 0;
@@ -68,7 +69,8 @@ document.addEventListener('DOMContentLoaded', () => {
     camera.position.set(0, gameParams.cameraHeight, 30); 
     camera.lookAt(0, 0, 0);
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    // INCREASED AMBIENT LIGHT
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
     scene.add(ambientLight);
 
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
@@ -98,9 +100,44 @@ document.addEventListener('DOMContentLoaded', () => {
     const CAT_BULLET = 0x0004;
     const CAT_WALL = 0x0008;
 
-    // --- Asset Loading ---
+    // --- Asset Loading & Procedural Textures ---
     const textureLoader = new THREE.TextureLoader();
     
+    function createProceduralTexture(type) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+
+        // Fill Background
+        ctx.fillStyle = '#444444';
+        ctx.fillRect(0, 0, 128, 128);
+
+        ctx.fillStyle = '#999999'; // Lighter grey/white
+
+        if (type === 'road') {
+            // Large squares / Checkered
+            ctx.fillRect(0, 0, 64, 64);
+            ctx.fillRect(64, 64, 64, 64);
+        } else if (type === 'building') {
+            // Window pattern
+            ctx.fillStyle = '#ffffaa'; // Window light color
+            for(let y=10; y<128; y+=32) {
+                for(let x=10; x<128; x+=20) {
+                    if(Math.random() > 0.3) ctx.fillRect(x, y, 12, 18); // Window shape
+                }
+            }
+        }
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.magFilter = THREE.NearestFilter;
+        tex.minFilter = THREE.NearestFilter;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+    }
+
     function loadAssets() {
         if(loadedTextures.length > 0) return Promise.resolve();
         const promises = [];
@@ -179,6 +216,22 @@ document.addEventListener('DOMContentLoaded', () => {
             const containerMesh = new THREE.Group(); 
             containerMesh.add(mesh);
 
+            // HEADLIGHTS
+            if (gameParams.headlightsEnabled) {
+                const leftLight = new THREE.SpotLight(0xffffff, 10, 40, 0.6, 0.5, 1);
+                leftLight.position.set(-0.6, 0.5, 1.5); 
+                const rightLight = new THREE.SpotLight(0xffffff, 10, 40, 0.6, 0.5, 1);
+                rightLight.position.set(0.6, 0.5, 1.5);
+
+                const leftTarget = new THREE.Object3D(); leftTarget.position.set(-0.6, 0, 10);
+                leftLight.target = leftTarget;
+                const rightTarget = new THREE.Object3D(); rightTarget.position.set(0.6, 0, 10);
+                rightLight.target = rightTarget;
+
+                containerMesh.add(leftLight); containerMesh.add(leftTarget);
+                containerMesh.add(rightLight); containerMesh.add(rightTarget);
+            }
+
             const body = world.createBody({
                 type: 'dynamic',
                 position: pl.Vec2(x, y),
@@ -249,6 +302,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const mat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
         const mesh = new THREE.Mesh(geo, mat);
         
+        // GLOWING BULLET
+        const light = new THREE.PointLight(0xffaa00, 5, 15);
+        mesh.add(light);
+
         const body = world.createBody({ type: 'dynamic', position: pl.Vec2(x, y), bullet: true });
         body.createFixture(pl.Circle(0.15), {
             filterCategoryBits: CAT_BULLET, filterMaskBits: CAT_ENEMY | CAT_WALL
@@ -291,20 +348,18 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Environment Generation ---
     function createCity() {
         const planeGeo = new THREE.PlaneGeometry(400, 400);
+        
+        // TEXTURED ROAD
+        const roadTex = createProceduralTexture('road');
+        roadTex.repeat.set(40, 40);
+
         const matType = gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial;
-        const planeMat = new matType({ color: 0x333333, side: THREE.DoubleSide });
+        const planeMat = new matType({ map: roadTex, side: THREE.DoubleSide });
         
         const ground = new THREE.Mesh(planeGeo, planeMat);
         ground.rotation.x = -Math.PI / 2;
         ground.receiveShadow = true;
         scene.add(ground);
-
-        for(let i=-200; i<200; i+=10) {
-            const mark = new THREE.Mesh(new THREE.PlaneGeometry(1, 4), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-            mark.rotation.x = -Math.PI / 2;
-            mark.position.set(0, 0.05, i);
-            scene.add(mark);
-        }
 
         createWall(-40, 0, 2, 400);
         createWall(40, 0, 2, 400);
@@ -324,9 +379,14 @@ document.addEventListener('DOMContentLoaded', () => {
     function createBuildingBlock(x, z, geo) {
         const h = Math.random() * 15 + 5;
         const w = Math.random() * 8 + 6;
+        
+        // WINDOW TEXTURE
+        const buildTex = createProceduralTexture('building');
+        buildTex.repeat.set(w/10, h/10);
+
         const mat = gameParams.simpleMaterials 
-            ? new THREE.MeshLambertMaterial({ color: Math.random() * 0xffffff })
-            : new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff });
+            ? new THREE.MeshLambertMaterial({ map: buildTex })
+            : new THREE.MeshStandardMaterial({ map: buildTex, roughness: 0.2 });
 
         const mesh = new THREE.Mesh(geo, mat);
         mesh.position.set(x, h/2, z);
@@ -646,7 +706,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 const matType = gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial;
                 const pg = new THREE.PlaneGeometry(w*BLOCK_SIZE*1.2, h*BLOCK_SIZE*1.2);
-                const pm = new matType({ color: 0x222222 });
+                
+                // TEXTURED GROUND FOR CITIES
+                const roadTex = createProceduralTexture('road');
+                roadTex.repeat.set(w, h);
+                const pm = new matType({ map: roadTex });
+
                 const g = new THREE.Mesh(pg, pm);
                 g.rotation.x = -Math.PI/2; g.position.y = -0.1;
                 scene.add(g);
@@ -655,9 +720,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     for (let x = 0; x < w; x++) {
                         if (mapGrid[z][x] === '#') {
                             const height = Math.random() * 25 + 5;
+                            
+                            // TEXTURED BUILDINGS
+                            const buildTex = createProceduralTexture('building');
+                            buildTex.repeat.set(BLOCK_SIZE/10, height/10);
+
                             const bMat = gameParams.simpleMaterials 
-                                ? new THREE.MeshLambertMaterial({ color: 0x444444 })
-                                : new THREE.MeshStandardMaterial({ color: 0x444444 });
+                                ? new THREE.MeshLambertMaterial({ map: buildTex })
+                                : new THREE.MeshStandardMaterial({ map: buildTex });
                                 
                             const mesh = new THREE.Mesh(boxGeo, bMat);
                             mesh.scale.set(BLOCK_SIZE, height, BLOCK_SIZE);
@@ -720,6 +790,10 @@ document.addEventListener('DOMContentLoaded', () => {
         dirLight.castShadow = e.target.checked;
         renderer.shadowMap.autoUpdate = e.target.checked;
         if(!e.target.checked) renderer.clearTarget(dirLight.shadow.map);
+    });
+
+    document.getElementById('headlightsToggle').addEventListener('change', (e) => {
+        gameParams.headlightsEnabled = e.target.checked;
     });
 
     document.getElementById('lowResToggle').addEventListener('change', (e) => {
