@@ -25,7 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
         enemySpeed: 60, 
         turnSpeed: 2.5,  
         drift: 0.85,
-        trafficCount: 25, 
+        trafficCount: 20, 
         simpleMaterials: false, 
         particlesEnabled: true,
         headlightsEnabled: false,
@@ -62,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x222222);
-    scene.fog = new THREE.Fog(0x222222, 50, 150);
+    scene.fog = new THREE.Fog(0x222222, 50, 140); 
 
     const camera = new THREE.PerspectiveCamera(gameParams.cameraFOV, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, gameParams.cameraHeight, 30); 
@@ -250,14 +250,9 @@ document.addEventListener('DOMContentLoaded', () => {
             
             this.aiTargetAngle = 0;
             this.lastDecisionTile = null;
-            
-            // AI Personality
-            // 'left': Always turn left
-            // 'right': Always turn right
-            // 'patrol': 2 straight, 1 left
-            // 'chaotic': Random turns
             this.aiType = aiType;
-            this.aiCounter = 0; // used for patrol logic
+            this.aiCounter = 0; 
+            this.stuckTimer = 0; // Tracks how long car has been stopped
         }
 
         update(dt) {
@@ -276,32 +271,21 @@ document.addEventListener('DOMContentLoaded', () => {
         aiUpdate(dt) {
             if (this.isPlayer) return;
 
-            const pos = this.body.getPosition();
+            // --- STUCK TRACKING ---
             const vel = this.body.getLinearVelocity().length();
-            
-            // Calculate tile position
+            if(vel < 1.0) {
+                this.stuckTimer += dt;
+            } else {
+                this.stuckTimer = 0;
+            }
+
+            const pos = this.body.getPosition();
             const tileX = Math.round(pos.x / BLOCK_SIZE) * BLOCK_SIZE;
             const tileZ = Math.round(pos.y / BLOCK_SIZE) * BLOCK_SIZE;
             const tileKey = `${tileX},${tileZ}`;
             const distToCenter = pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ));
 
-            // --- STUCK FIX (ONLY IF STOPPED) ---
-            // If car is almost stopped (vel < 0.5) and unlucky, reset it
-            // Removed distance check to prevent rubber-banding
-            if (vel < 0.5 && Math.random() < 0.02) {
-                // Check if current tile is actually a road
-                if (roadLookup[tileKey]) {
-                    this.body.setPosition(pl.Vec2(tileX, tileZ));
-                    this.body.setAngle(this.aiTargetAngle);
-                    this.body.setAngularVelocity(0);
-                    const forward = this.body.getWorldVector(pl.Vec2(0, 1));
-                    this.body.setLinearVelocity(forward.mul(this.maxSpeed / 3.6));
-                    this.lastDecisionTile = null; 
-                    return; 
-                }
-            }
-
-            // Logic: Drive, check for turns
+            // Standard Navigation
             if (distToCenter < 3.0 && this.lastDecisionTile !== tileKey && currentMapType !== 'default') {
                 this.lastDecisionTile = tileKey;
                 this.makeTurnDecision(tileX, tileZ);
@@ -313,13 +297,11 @@ document.addEventListener('DOMContentLoaded', () => {
             while (angleDiff > Math.PI) angleDiff -= 2*Math.PI;
 
             if (Math.abs(angleDiff) > 0.1) {
-                // Turning
                 this.body.setAngularVelocity(angleDiff * 3.0);
                 const forward = this.body.getWorldVector(pl.Vec2(0, 1));
                 const turnSpeed = this.maxSpeed * 0.4;
                 this.body.setLinearVelocity(forward.mul(turnSpeed / 3.6));
             } else {
-                // Cruising
                 this.body.setAngularVelocity(0);
                 const forward = this.body.getWorldVector(pl.Vec2(0, 1));
                 this.body.setLinearVelocity(forward.mul(this.maxSpeed / 3.6));
@@ -327,19 +309,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         makeTurnDecision(cx, cz) {
-            // Available exits
             const neighbors = [
-                { dir: 0, x: cx, z: cz - BLOCK_SIZE, angle: 0 },         // N
-                { dir: 1, x: cx + BLOCK_SIZE, z: cz, angle: -Math.PI/2 },// E
-                { dir: 2, x: cx, z: cz + BLOCK_SIZE, angle: Math.PI },   // S
-                { dir: 3, x: cx - BLOCK_SIZE, z: cz, angle: Math.PI/2 }  // W
+                { dir: 0, x: cx, z: cz - BLOCK_SIZE, angle: 0 },         
+                { dir: 1, x: cx + BLOCK_SIZE, z: cz, angle: -Math.PI/2 },
+                { dir: 2, x: cx, z: cz + BLOCK_SIZE, angle: Math.PI },   
+                { dir: 3, x: cx - BLOCK_SIZE, z: cz, angle: Math.PI/2 }  
             ];
-
-            // Only valid roads
             const valid = neighbors.filter(n => roadLookup[`${n.x},${n.z}`]);
             if (valid.length === 0) return; 
 
-            // Calculate Relative Directions
             const getRel = (target) => {
                 let diff = target - this.aiTargetAngle;
                 while (diff <= -Math.PI) diff += 2*Math.PI;
@@ -348,57 +326,32 @@ document.addEventListener('DOMContentLoaded', () => {
             };
 
             const straight = valid.find(n => Math.abs(getRel(n.angle)) < 0.1);
-            // +PI/2 is Left, -PI/2 is Right
             const left     = valid.find(n => Math.abs(getRel(n.angle) - Math.PI/2) < 0.1); 
             const right    = valid.find(n => Math.abs(getRel(n.angle) + Math.PI/2) < 0.1);
 
             let selected = null;
 
-            if (this.aiType === 'left') {
-                selected = left || straight || right;
-            } 
-            else if (this.aiType === 'right') {
-                selected = right || straight || left;
-            } 
+            if (this.aiType === 'left') selected = left || straight || right;
+            else if (this.aiType === 'right') selected = right || straight || left;
             else if (this.aiType === 'patrol') {
-                // 2 Straight, 1 Left
                 if (this.aiCounter < 2) {
-                    if (straight) {
-                        selected = straight;
-                        this.aiCounter++;
-                    } else {
-                        // Forced to turn
-                        selected = left || right;
-                        // Reset counter if we couldn't go straight
-                        this.aiCounter = 0;
-                    }
-                } else {
-                    selected = left || straight || right;
-                    this.aiCounter = 0;
-                }
+                    if (straight) { selected = straight; this.aiCounter++; } 
+                    else { selected = left || right; this.aiCounter = 0; }
+                } else { selected = left || straight || right; this.aiCounter = 0; }
             } 
             else { 
-                // Chaotic / Default
-                // Prefer Turns over Straight (Turn on every intersection logic)
                 const turns = [];
                 if(left) turns.push(left);
                 if(right) turns.push(right);
-                
-                if(turns.length > 0) {
-                    selected = turns[Math.floor(Math.random() * turns.length)];
-                } else {
-                    selected = straight;
-                }
+                if(turns.length > 0) selected = turns[Math.floor(Math.random() * turns.length)];
+                else selected = straight;
             }
 
-            // Fallback (e.g. Dead end u-turn)
             if (!selected) {
-                // Pick any valid that isn't U-turn if possible
                 const nonU = valid.filter(n => Math.abs(getRel(n.angle) - Math.PI) > 0.1);
                 if(nonU.length > 0) selected = nonU[Math.floor(Math.random()*nonU.length)];
                 else selected = valid[0];
             }
-
             this.aiTargetAngle = selected.angle;
         }
 
@@ -439,7 +392,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const mat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
         const mesh = new THREE.Mesh(geo, mat);
         
-        // Conditional Glow
         if (gameParams.bulletGlow) {
             const light = new THREE.PointLight(0xffaa00, 5, 15);
             mesh.add(light);
@@ -482,7 +434,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // --- Environment Generation ---
     function buildRoadLookup() {
         roadLookup = {};
         roadTiles.forEach(t => {
@@ -563,38 +514,55 @@ document.addEventListener('DOMContentLoaded', () => {
         if (loadedTextures.length === 0 || !player1) return;
         
         const pPos = player1.body.getPosition();
-        // Get player forward direction
         const pDir = player1.body.getWorldVector(pl.Vec2(0, 1)); 
 
-        const spawnRadiusMin = 40;
-        const spawnRadiusMax = 110; 
+        const spawnRadiusMin = 60;  // Just outside FOV
+        const spawnRadiusMax = 120; // Fog distance
         const limit = gameParams.trafficCount;
 
-        // --- CULLING (Despawn behind player or out of view) ---
+        // --- CULLING (Removal) ---
         for(let i = trafficPool.length - 1; i >= 0; i--) {
             const car = trafficPool[i];
             const carPos = car.body.getPosition();
             
-            // Vector from Player to Car
             const toCar = pl.Vec2.sub(carPos, pPos);
             const dist = toCar.length();
-            
-            // Dot product determines if in front or behind
             const dot = pl.Vec2.dot(toCar, pDir);
 
-            // Remove if far away OR (moderately far AND behind player)
-            if(dist > spawnRadiusMax * 1.3 || (dot < -20 && dist > 30)) {
+            let shouldRemove = false;
+
+            // 1. BEHIND PLAYER (Out of screen bottom)
+            if (dot < -20) shouldRemove = true;
+
+            // 2. TOO FAR AWAY (Fog)
+            if (dist > 130) shouldRemove = true;
+
+            // 3. STUCK and not extremely close to player
+            if (car.stuckTimer > 2.0) {
+                // If stuck behind or far ahead, delete it.
+                // If stuck right in front of your face (< 50 units, > -10 dot), keep it 
+                // so it doesn't vanish magically while you look at it.
+                if (dot < -10 || dist > 50) {
+                    shouldRemove = true;
+                }
+            }
+            
+            // 4. SIDE/FAR: If it's to the side and getting distant
+            if (Math.abs(dot) < 30 && dist > 70) shouldRemove = true;
+
+            if(shouldRemove) {
                 car.markedForDeletion = true; 
             }
         }
 
+        // --- SPAWNING (Replenish) ---
         if (trafficPool.length < limit) {
              const tex = loadedTextures[Math.floor(Math.random() * loadedTextures.length)];
              
              let validTile = null;
              let attempts = 0;
              
-             // Try to find a tile IN FRONT of the player
+             // Find a tile roughly IN FRONT of player
              while(!validTile && attempts < 15) {
                  const tile = roadTiles[Math.floor(Math.random() * roadTiles.length)];
                  const tileVec = pl.Vec2(tile.x, tile.z);
@@ -602,7 +570,10 @@ document.addEventListener('DOMContentLoaded', () => {
                  const dist = toTile.length();
                  const dot = pl.Vec2.dot(toTile, pDir);
 
-                 // Valid if: Within range AND In front of player
+                 // Spawn Criteria:
+                 // 1. Must be far enough to not pop in (dist > min)
+                 // 2. Must be within fog range (dist < max)
+                 // 3. Prefer spawning IN FRONT (dot > 0)
                  if (dist > spawnRadiusMin && dist < spawnRadiusMax && dot > -10) {
                      let blocked = false;
                      for(let c of trafficPool) {
@@ -617,44 +588,56 @@ document.addEventListener('DOMContentLoaded', () => {
 
              if (!validTile) return; 
 
-             // Determine Spawn position and angle to drive TOWARDS player or correct lane
              let x = validTile.x;
              let z = validTile.z;
              let angle = 0;
              const laneOffset = 4.5;
 
+             // Calculate angle to drive TOWARDS player's general area
+             // We do this by checking the vector from Spawn -> Player
+             const dx = pPos.x - x;
+             const dz = pPos.y - z;
+
              if (currentMapType === 'default') {
+                 // Classic Highway Logic
                  const pAngle = player1.body.getAngle();
-                 if (Math.random() > 0.3) {
-                     // Oncoming!
-                     angle = pAngle + Math.PI; 
-                     x = (Math.cos(angle) > 0) ? x + laneOffset : x - laneOffset;
+                 
+                 // If player is still, assume North (0)
+                 if (Math.abs(pAngle) < 0.1) {
+                     // 70% Chance to be oncoming traffic if spawned ahead
+                     if (dz < 0 && Math.random() < 0.7) { 
+                        angle = Math.PI; // Drive South
+                        x -= laneOffset; // Right lane
+                     } else {
+                        angle = 0; // Drive North
+                        x += laneOffset; 
+                     }
                  } else {
-                     angle = pAngle;
-                     x = (Math.cos(angle) > 0) ? x - laneOffset : x + laneOffset;
+                     // Use player direction
+                     if (Math.random() > 0.4) {
+                        angle = pAngle + Math.PI; 
+                        x = (Math.cos(angle) > 0) ? x + laneOffset : x - laneOffset;
+                     } else {
+                        angle = pAngle;
+                        x = (Math.cos(angle) > 0) ? x - laneOffset : x + laneOffset;
+                     }
                  }
              } else {
-                 // City Mode: Pick direction that faces roughly towards player or grid
-                 const dx = pPos.x - x;
-                 const dz = pPos.y - z;
-                 
-                 // Snap to 4 cardinal directions
+                 // City Grid Logic: Snap to Cardinal Direction towards player
                  if (Math.abs(dx) > Math.abs(dz)) {
-                     // Horizontal
-                     if (dx > 0) { angle = -Math.PI/2; z -= laneOffset; } // Face East
-                     else { angle = Math.PI/2; z += laneOffset; }         // Face West
+                     // Drive Horizontal
+                     if (dx > 0) { angle = -Math.PI/2; z -= laneOffset; } // Drive East
+                     else { angle = Math.PI/2; z += laneOffset; }         // Drive West
                  } else {
-                     // Vertical
-                     if (dz > 0) { angle = 0; x += laneOffset; }          // Face North
-                     else { angle = Math.PI; x -= laneOffset; }           // Face South
+                     // Drive Vertical
+                     if (dz > 0) { angle = 0; x += laneOffset; }          // Drive North
+                     else { angle = Math.PI; x -= laneOffset; }           // Drive South
                  }
              }
 
-             // Normalize angle
              while (angle <= -Math.PI) angle += 2*Math.PI;
              while (angle > Math.PI) angle -= 2*Math.PI;
 
-             // Randomize AI Personality
              const types = ['left', 'right', 'patrol', 'chaotic'];
              const type = types[Math.floor(Math.random() * types.length)];
 
@@ -711,6 +694,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!gameActive || isPaused) return;
 
+        // Frequent check for spawning/culling
         if (Math.random() < 0.1) spawnTraffic();
 
         world.step(TIME_STEP, velIter, posIter);
@@ -765,7 +749,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         for (let i = entities.length - 1; i >= 0; i--) {
-            // FIX: Ensure ALL entities (especially AI cars) update visual mesh
             if(entities[i] === player1 || entities[i] === player2) entities[i].update(dt);
             else entities[i].update(dt);
 
