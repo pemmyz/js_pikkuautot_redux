@@ -63,7 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x222222);
-    scene.fog = new THREE.Fog(0x222222, 50, gameParams.spawnRadius + 30); 
+    scene.fog = new THREE.Fog(0x222222, 50, 160); 
 
     const camera = new THREE.PerspectiveCamera(gameParams.cameraFOV, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, gameParams.cameraHeight, 30); 
@@ -253,7 +253,10 @@ document.addEventListener('DOMContentLoaded', () => {
             this.lastDecisionTile = null;
             this.aiType = aiType;
             this.aiCounter = 0; 
-            this.stuckTimer = 0; 
+            
+            // TIMERS
+            this.stuckTimer = 0; // Total time spent stopped
+            this.resetTimer = 0; // Time since last "Hard Reset" attempt
         }
 
         update(dt) {
@@ -272,20 +275,42 @@ document.addEventListener('DOMContentLoaded', () => {
         aiUpdate(dt) {
             if (this.isPlayer) return;
 
-            // --- STUCK TRACKING ---
-            const vel = this.body.getLinearVelocity().length();
-            if(vel < 1.0) {
-                this.stuckTimer += dt;
-            } else {
-                this.stuckTimer = 0;
-            }
-
             const pos = this.body.getPosition();
+            const vel = this.body.getLinearVelocity().length();
+            
             const tileX = Math.round(pos.x / BLOCK_SIZE) * BLOCK_SIZE;
             const tileZ = Math.round(pos.y / BLOCK_SIZE) * BLOCK_SIZE;
             const tileKey = `${tileX},${tileZ}`;
             const distToCenter = pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ));
 
+            // --- STUCK TRACKING ---
+            if(vel < 1.0) {
+                this.stuckTimer += dt;
+                this.resetTimer += dt;
+            } else {
+                this.stuckTimer = 0;
+                this.resetTimer = 0;
+            }
+
+            // --- REPEATING RESET LOGIC ---
+            // Every 2 seconds of being stopped, force a reset
+            if (this.resetTimer > 2.0) {
+                if (roadLookup[tileKey]) {
+                    // 1. Teleport to lane center
+                    this.body.setPosition(pl.Vec2(tileX, tileZ));
+                    // 2. Snap Angle
+                    this.body.setAngle(this.aiTargetAngle);
+                    this.body.setAngularVelocity(0);
+                    // 3. Force Push
+                    const fwd = this.body.getWorldVector(pl.Vec2(0, 1));
+                    this.body.setLinearVelocity(fwd.mul(this.maxSpeed / 3.6));
+                    
+                    // Reset interval timer (but keep stuckTimer running to cull if it keeps failing)
+                    this.resetTimer = 0; 
+                }
+            }
+
+            // Normal Navigation Logic
             if (distToCenter < 3.0 && this.lastDecisionTile !== tileKey && currentMapType !== 'default') {
                 this.lastDecisionTile = tileKey;
                 this.makeTurnDecision(tileX, tileZ);
@@ -529,17 +554,17 @@ document.addEventListener('DOMContentLoaded', () => {
             
             let shouldRemove = false;
 
-            // 1. PRIMARY: Hard Radius Check
-            // If ANY car (moving or stuck) is outside the radius, delete it.
+            // 1. PRIMARY: Hard Radius Check (MOVING OR STUCK)
             if (dist > spawnRadius) {
                 shouldRemove = true;
             }
 
-            // 2. STUCK Logic (Secondary)
-            // If it's stuck inside the radius, we still want to clean it up
-            // unless it's right in front of the player (dist > 40).
-            if (car.stuckTimer > 2.0 && dist > 40) {
-                shouldRemove = true;
+            // 2. STUCK Logic (Inside Radius)
+            // If it has been stuck for 6 seconds (meaning ~3 reset attempts failed)
+            // And it is NOT right next to the player (dist > 45)
+            // Then remove it to clear the jam.
+            if (!shouldRemove && car.stuckTimer > 6.0 && dist > 45) {
+                 shouldRemove = true;
             }
 
             if(shouldRemove) {
@@ -554,8 +579,6 @@ document.addEventListener('DOMContentLoaded', () => {
              let validTile = null;
              let attempts = 0;
              
-             // Try to find a tile IN FRONT of the player, but INSIDE the radius
-             // Ideally spawning just inside the radius edge so they appear naturally
              const spawnMax = spawnRadius - 5;
              const spawnMin = spawnRadius - 45; 
 
@@ -566,9 +589,6 @@ document.addEventListener('DOMContentLoaded', () => {
                  const dist = toTile.length();
                  const dot = pl.Vec2.dot(toTile, pDir);
 
-                 // Spawn Criteria:
-                 // 1. Inside valid spawn ring
-                 // 2. Generally in front of player (dot > -20)
                  if (dist > spawnMin && dist < spawnMax && dot > -20) {
                      let blocked = false;
                      for(let c of trafficPool) {
@@ -613,7 +633,6 @@ document.addEventListener('DOMContentLoaded', () => {
                  }
              } else {
                  // City Grid Logic: SMART DIRECTION
-                 // Check neighbors to determine road alignment
                  const nN = roadLookup[`${x},${z - BLOCK_SIZE}`];
                  const nS = roadLookup[`${x},${z + BLOCK_SIZE}`];
                  const nE = roadLookup[`${x + BLOCK_SIZE},${z}`];
@@ -629,13 +648,11 @@ document.addEventListener('DOMContentLoaded', () => {
                  } else if (isHorz && !isVert) {
                     useVertical = false;
                  } else {
-                    // Intersection: choose direction closer to player
                     useVertical = Math.abs(dz) > Math.abs(dx);
                  }
 
                  if (useVertical) {
-                    // Drive towards player Z
-                    if (pPos.y > z) { // Player is "North" / Down-screen
+                    if (pPos.y > z) { 
                          angle = 0; 
                          x += laneOffset; 
                     } else {
@@ -643,8 +660,7 @@ document.addEventListener('DOMContentLoaded', () => {
                          x -= laneOffset;
                     }
                  } else {
-                    // Drive towards player X
-                    if (pPos.x > x) { // Player is East
+                    if (pPos.x > x) { 
                         angle = -Math.PI/2; 
                         z -= laneOffset;
                     } else {
