@@ -253,10 +253,8 @@ document.addEventListener('DOMContentLoaded', () => {
             this.lastDecisionTile = null;
             this.aiType = aiType;
             this.aiCounter = 0; 
-            
-            // TIMERS
-            this.stuckTimer = 0; // Total time spent stopped
-            this.resetTimer = 0; // Time since last "Hard Reset" attempt
+            this.stuckTimer = 0; 
+            this.resetTimer = 0; 
         }
 
         update(dt) {
@@ -284,7 +282,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const distToCenter = pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ));
 
             // --- STUCK TRACKING ---
-            if(vel < 1.0) {
+            if(vel < 2.0) {
                 this.stuckTimer += dt;
                 this.resetTimer += dt;
             } else {
@@ -293,24 +291,21 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // --- REPEATING RESET LOGIC ---
-            // Every 2 seconds of being stopped, force a reset
-            if (this.resetTimer > 2.0) {
+            if (this.resetTimer > 1.5) {
                 if (roadLookup[tileKey]) {
-                    // 1. Teleport to lane center
                     this.body.setPosition(pl.Vec2(tileX, tileZ));
-                    // 2. Snap Angle
                     this.body.setAngle(this.aiTargetAngle);
                     this.body.setAngularVelocity(0);
-                    // 3. Force Push
                     const fwd = this.body.getWorldVector(pl.Vec2(0, 1));
                     this.body.setLinearVelocity(fwd.mul(this.maxSpeed / 3.6));
-                    
-                    // Reset interval timer (but keep stuckTimer running to cull if it keeps failing)
+                    this.body.setAwake(true);
                     this.resetTimer = 0; 
+                } else {
+                    // IF OFF ROAD, DELETE IMMEDIATELY
+                    this.markedForDeletion = true;
                 }
             }
 
-            // Normal Navigation Logic
             if (distToCenter < 3.0 && this.lastDecisionTile !== tileKey && currentMapType !== 'default') {
                 this.lastDecisionTile = tileKey;
                 this.makeTurnDecision(tileX, tileZ);
@@ -560,10 +555,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // 2. STUCK Logic (Inside Radius)
-            // If it has been stuck for 6 seconds (meaning ~3 reset attempts failed)
-            // And it is NOT right next to the player (dist > 45)
-            // Then remove it to clear the jam.
-            if (!shouldRemove && car.stuckTimer > 6.0 && dist > 45) {
+            // If car has been stuck for > 4 seconds, remove it 
+            // unless it is literally right next to the player (dist < 40)
+            if (!shouldRemove && car.stuckTimer > 4.0 && dist > 40) {
                  shouldRemove = true;
             }
 
@@ -782,16 +776,43 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        for (let i = entities.length - 1; i >= 0; i--) {
-            if(entities[i] === player1 || entities[i] === player2) entities[i].update(dt);
-            else entities[i].update(dt);
+        // --- NEW: ABSOLUTE CULLING IN MAIN LOOP ---
+        // This ensures visual sync every single frame
+        if (player1 && player1.body) {
+             const pPos = player1.body.getPosition();
+             const radiusSq = gameParams.spawnRadius * gameParams.spawnRadius;
+             
+             for (let i = entities.length - 1; i >= 0; i--) {
+                 // Skip player
+                 if (entities[i] === player1 || entities[i] === player2) {
+                     entities[i].update(dt);
+                     continue;
+                 }
+                 
+                 // Update other entities
+                 entities[i].update(dt);
 
-            if (entities[i].markedForDeletion) {
-                entities[i].destroy();
-                entities.splice(i, 1);
-                const idx = trafficPool.indexOf(entities[i]);
-                if(idx > -1) trafficPool.splice(idx, 1);
-            }
+                 // Check Distance for Cars only
+                 if (entities[i] instanceof Car && !entities[i].isPlayer) {
+                     const cPos = entities[i].body.getPosition();
+                     const dSq = (cPos.x - pPos.x)**2 + (cPos.y - pPos.y)**2;
+                     if (dSq > radiusSq) {
+                         entities[i].markedForDeletion = true;
+                     }
+                 }
+
+                 if (entities[i].markedForDeletion) {
+                     entities[i].destroy();
+                     entities.splice(i, 1);
+                     const idx = trafficPool.indexOf(entities[i]);
+                     if(idx > -1) trafficPool.splice(idx, 1);
+                 }
+             }
+        } else {
+             // Fallback loop if player not ready
+             for (let i = entities.length - 1; i >= 0; i--) {
+                 entities[i].update(dt);
+             }
         }
 
         if (player1 && player1.mesh) {
