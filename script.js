@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
         turnSpeed: 2.5,  
         drift: 0.85,
         trafficCount: 20, 
+        spawnRadius: 120, // Controlled by slider
         simpleMaterials: false, 
         particlesEnabled: true,
         headlightsEnabled: false,
@@ -62,7 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x222222);
-    scene.fog = new THREE.Fog(0x222222, 50, 140); 
+    scene.fog = new THREE.Fog(0x222222, 50, gameParams.spawnRadius + 30); 
 
     const camera = new THREE.PerspectiveCamera(gameParams.cameraFOV, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, gameParams.cameraHeight, 30); 
@@ -252,7 +253,7 @@ document.addEventListener('DOMContentLoaded', () => {
             this.lastDecisionTile = null;
             this.aiType = aiType;
             this.aiCounter = 0; 
-            this.stuckTimer = 0; // Tracks how long car has been stopped
+            this.stuckTimer = 0; 
         }
 
         update(dt) {
@@ -285,7 +286,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const tileKey = `${tileX},${tileZ}`;
             const distToCenter = pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ));
 
-            // Standard Navigation
             if (distToCenter < 3.0 && this.lastDecisionTile !== tileKey && currentMapType !== 'default') {
                 this.lastDecisionTile = tileKey;
                 this.makeTurnDecision(tileX, tileZ);
@@ -516,8 +516,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const pPos = player1.body.getPosition();
         const pDir = player1.body.getWorldVector(pl.Vec2(0, 1)); 
 
-        const spawnRadiusMin = 60;  // Just outside FOV
-        const spawnRadiusMax = 120; // Fog distance
+        const spawnRadius = gameParams.spawnRadius; // Controlled by slider
         const limit = gameParams.trafficCount;
 
         // --- CULLING (Removal) ---
@@ -527,28 +526,21 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const toCar = pl.Vec2.sub(carPos, pPos);
             const dist = toCar.length();
-            const dot = pl.Vec2.dot(toCar, pDir);
-
+            
             let shouldRemove = false;
 
-            // 1. BEHIND PLAYER (Out of screen bottom)
-            if (dot < -20) shouldRemove = true;
-
-            // 2. TOO FAR AWAY (Fog)
-            if (dist > 130) shouldRemove = true;
-
-            // 3. STUCK and not extremely close to player
-            if (car.stuckTimer > 2.0) {
-                // If stuck behind or far ahead, delete it.
-                // If stuck right in front of your face (< 50 units, > -10 dot), keep it 
-                // so it doesn't vanish magically while you look at it.
-                if (dot < -10 || dist > 50) {
-                    shouldRemove = true;
-                }
+            // 1. PRIMARY: Hard Radius Check
+            // If ANY car (moving or stuck) is outside the radius, delete it.
+            if (dist > spawnRadius) {
+                shouldRemove = true;
             }
-            
-            // 4. SIDE/FAR: If it's to the side and getting distant
-            if (Math.abs(dot) < 30 && dist > 70) shouldRemove = true;
+
+            // 2. STUCK Logic (Secondary)
+            // If it's stuck inside the radius, we still want to clean it up
+            // unless it's right in front of the player (dist > 40).
+            if (car.stuckTimer > 2.0 && dist > 40) {
+                shouldRemove = true;
+            }
 
             if(shouldRemove) {
                 car.markedForDeletion = true; 
@@ -562,7 +554,11 @@ document.addEventListener('DOMContentLoaded', () => {
              let validTile = null;
              let attempts = 0;
              
-             // Find a tile roughly IN FRONT of player
+             // Try to find a tile IN FRONT of the player, but INSIDE the radius
+             // Ideally spawning just inside the radius edge so they appear naturally
+             const spawnMax = spawnRadius - 5;
+             const spawnMin = spawnRadius - 45; 
+
              while(!validTile && attempts < 15) {
                  const tile = roadTiles[Math.floor(Math.random() * roadTiles.length)];
                  const tileVec = pl.Vec2(tile.x, tile.z);
@@ -571,10 +567,9 @@ document.addEventListener('DOMContentLoaded', () => {
                  const dot = pl.Vec2.dot(toTile, pDir);
 
                  // Spawn Criteria:
-                 // 1. Must be far enough to not pop in (dist > min)
-                 // 2. Must be within fog range (dist < max)
-                 // 3. Prefer spawning IN FRONT (dot > 0)
-                 if (dist > spawnRadiusMin && dist < spawnRadiusMax && dot > -10) {
+                 // 1. Inside valid spawn ring
+                 // 2. Generally in front of player (dot > -20)
+                 if (dist > spawnMin && dist < spawnMax && dot > -20) {
                      let blocked = false;
                      for(let c of trafficPool) {
                          if(pl.Vec2.distance(c.body.getPosition(), tileVec) < 15) {
@@ -593,27 +588,21 @@ document.addEventListener('DOMContentLoaded', () => {
              let angle = 0;
              const laneOffset = 4.5;
 
-             // Calculate angle to drive TOWARDS player's general area
-             // We do this by checking the vector from Spawn -> Player
              const dx = pPos.x - x;
              const dz = pPos.y - z;
 
              if (currentMapType === 'default') {
                  // Classic Highway Logic
                  const pAngle = player1.body.getAngle();
-                 
-                 // If player is still, assume North (0)
                  if (Math.abs(pAngle) < 0.1) {
-                     // 70% Chance to be oncoming traffic if spawned ahead
                      if (dz < 0 && Math.random() < 0.7) { 
                         angle = Math.PI; // Drive South
-                        x -= laneOffset; // Right lane
+                        x -= laneOffset; 
                      } else {
                         angle = 0; // Drive North
                         x += laneOffset; 
                      }
                  } else {
-                     // Use player direction
                      if (Math.random() > 0.4) {
                         angle = pAngle + Math.PI; 
                         x = (Math.cos(angle) > 0) ? x + laneOffset : x - laneOffset;
@@ -623,15 +612,45 @@ document.addEventListener('DOMContentLoaded', () => {
                      }
                  }
              } else {
-                 // City Grid Logic: Snap to Cardinal Direction towards player
-                 if (Math.abs(dx) > Math.abs(dz)) {
-                     // Drive Horizontal
-                     if (dx > 0) { angle = -Math.PI/2; z -= laneOffset; } // Drive East
-                     else { angle = Math.PI/2; z += laneOffset; }         // Drive West
+                 // City Grid Logic: SMART DIRECTION
+                 // Check neighbors to determine road alignment
+                 const nN = roadLookup[`${x},${z - BLOCK_SIZE}`];
+                 const nS = roadLookup[`${x},${z + BLOCK_SIZE}`];
+                 const nE = roadLookup[`${x + BLOCK_SIZE},${z}`];
+                 const nW = roadLookup[`${x - BLOCK_SIZE},${z}`];
+
+                 const isVert = nN || nS;
+                 const isHorz = nE || nW;
+
+                 let useVertical = false;
+
+                 if (isVert && !isHorz) {
+                    useVertical = true;
+                 } else if (isHorz && !isVert) {
+                    useVertical = false;
                  } else {
-                     // Drive Vertical
-                     if (dz > 0) { angle = 0; x += laneOffset; }          // Drive North
-                     else { angle = Math.PI; x -= laneOffset; }           // Drive South
+                    // Intersection: choose direction closer to player
+                    useVertical = Math.abs(dz) > Math.abs(dx);
+                 }
+
+                 if (useVertical) {
+                    // Drive towards player Z
+                    if (pPos.y > z) { // Player is "North" / Down-screen
+                         angle = 0; 
+                         x += laneOffset; 
+                    } else {
+                         angle = Math.PI; 
+                         x -= laneOffset;
+                    }
+                 } else {
+                    // Drive towards player X
+                    if (pPos.x > x) { // Player is East
+                        angle = -Math.PI/2; 
+                        z -= laneOffset;
+                    } else {
+                        angle = Math.PI/2; 
+                        z += laneOffset;
+                    }
                  }
              }
 
@@ -694,7 +713,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!gameActive || isPaused) return;
 
-        // Frequent check for spawning/culling
         if (Math.random() < 0.1) spawnTraffic();
 
         world.step(TIME_STEP, velIter, posIter);
@@ -882,6 +900,15 @@ document.addEventListener('DOMContentLoaded', () => {
         customMenuGroup.appendChild(div);
     }
 
+    // --- NEW: INJECT RADIUS SLIDER INTO GAMEPLAY SECTION ---
+    const gameplayGroup = document.querySelectorAll('#customizeMenu .setting-group')[2]; 
+    if(gameplayGroup && !document.getElementById('radiusSlider')) {
+        const div = document.createElement('div');
+        div.className = 'setting-row';
+        div.innerHTML = '<label>Traffic Radius:</label><input type="range" id="radiusSlider" min="50" max="300" step="10" value="120"><span class="slider-value" id="radiusValue">120</span>';
+        gameplayGroup.appendChild(div);
+    }
+
     function toggleMenu(menu) {
         const isHidden = menu.classList.contains('hidden');
         helpMenu.classList.add('hidden');
@@ -922,4 +949,15 @@ document.addEventListener('DOMContentLoaded', () => {
     updateSlider('playerSpeedSlider', 'playerSpeed', 'playerSpeedValue');
     updateSlider('enemySpeedSlider', 'enemySpeed', 'enemySpeedValue');
     updateSlider('densitySlider', 'trafficCount', 'densityValue');
+    
+    // Updated Listener for radius slider to change Fog as well
+    const rSlider = document.getElementById('radiusSlider');
+    if(rSlider) {
+        rSlider.addEventListener('input', (e) => {
+             const val = parseInt(e.target.value);
+             gameParams.spawnRadius = val;
+             document.getElementById('radiusValue').innerText = val;
+             scene.fog.far = val + 40; 
+        });
+    }
 });
