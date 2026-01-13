@@ -5,8 +5,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const BLOCK_SIZE = 20; 
     
     // --- Traffic Lane Settings ---
-    // LANE_INNER: For going Straight or Left
-    // LANE_OUTER: For turning Right (Grouped here)
     const LANE_INNER = 2.5; 
     const LANE_OUTER = 6.5; 
     let trafficSpawnCounter = 0;
@@ -15,7 +13,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const pl = planck;
     const TIME_STEP = 1 / 60;
     
-    // Dynamic physics iterations for optimization
     let velIter = 6; 
     let posIter = 2; 
 
@@ -33,7 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
         turnSpeed: 2.5,  
         drift: 0.85,
         trafficCount: 20, 
-        spawnRadius: 120, // Controlled by slider
+        spawnRadius: 120,
         simpleMaterials: false, 
         particlesEnabled: true,
         headlightsEnabled: false,
@@ -243,8 +240,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 angularDamping: 2.0 
             });
 
+            // Prevent cars from sleeping if they stop moving
+            body.setSleepingAllowed(false);
+
             body.createFixture(pl.Box(width / 2, height / 2), {
-                density: 2.0, friction: 0.3, restitution: 0.1,
+                density: 5.0, // Increased density for "Tank-like" pushing power
+                friction: 0.1, // Low friction so they don't get stuck on walls
+                restitution: 0.1,
                 filterCategoryBits: isPlayer ? CAT_PLAYER : CAT_ENEMY,
                 filterMaskBits: CAT_PLAYER | CAT_ENEMY | CAT_WALL | CAT_BULLET
             });
@@ -254,12 +256,12 @@ document.addEventListener('DOMContentLoaded', () => {
             this.playerIndex = playerIndex;
             this.shootCooldown = 0;
             this.maxSpeed = isPlayer ? gameParams.playerSpeed : gameParams.enemySpeed;
-            this.power = isPlayer ? 100 : 70; 
+            this.power = isPlayer ? 100 : 150; // Extra power for AI to push through
             
             this.aiTargetAngle = 0;
             this.lastDecisionTile = null;
-            this.plannedAction = plannedAction; // 'left', 'right', or 'straight'
-            this.laneOffset = laneOffset; // Store expected distance from center line
+            this.plannedAction = plannedAction; 
+            this.laneOffset = laneOffset; 
             this.aiCounter = 0; 
             this.stuckTimer = 0; 
             this.resetTimer = 0; 
@@ -282,39 +284,38 @@ document.addEventListener('DOMContentLoaded', () => {
             if (this.isPlayer) return;
 
             const pos = this.body.getPosition();
-            const vel = this.body.getLinearVelocity().length();
+            const velVec = this.body.getLinearVelocity();
+            const vel = velVec.length();
             
             const tileX = Math.round(pos.x / BLOCK_SIZE) * BLOCK_SIZE;
             const tileZ = Math.round(pos.y / BLOCK_SIZE) * BLOCK_SIZE;
             const tileKey = `${tileX},${tileZ}`;
             const distToCenter = pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ));
 
-            // --- STUCK TRACKING ---
-            if(vel < 2.0) {
+            // --- ANTI-STALL LOGIC ---
+            // If speed drops below 10, assume collision/stuck and PUSH
+            if(vel < 10.0) {
                 this.stuckTimer += dt;
-                this.resetTimer += dt;
+                // Apply a shove in the forward direction
+                const fwd = this.body.getWorldVector(pl.Vec2(0, 1));
+                this.body.applyLinearImpulse(fwd.mul(this.body.getMass() * 0.8), this.body.getWorldCenter());
             } else {
                 this.stuckTimer = 0;
-                this.resetTimer = 0;
             }
 
-            // --- REPEATING RESET LOGIC ---
-            if (this.resetTimer > 1.5) {
+            // If stuck for > 2 seconds despite pushing, attempt reset or delete
+            if (this.stuckTimer > 2.0) {
                 if (roadLookup[tileKey]) {
                     this.body.setPosition(pl.Vec2(tileX, tileZ));
                     this.body.setAngle(this.aiTargetAngle);
-                    this.body.setAngularVelocity(0);
-                    const fwd = this.body.getWorldVector(pl.Vec2(0, 1));
-                    this.body.setLinearVelocity(fwd.mul(this.maxSpeed / 3.6));
-                    this.body.setAwake(true);
-                    this.resetTimer = 0; 
+                    // Reset velocity to get moving immediately
+                    this.body.setLinearVelocity(this.body.getWorldVector(pl.Vec2(0,1)).mul(10));
+                    this.stuckTimer = 0; 
                 } else {
-                    // IF OFF ROAD, DELETE IMMEDIATELY
                     this.markedForDeletion = true;
                 }
             }
 
-            // Expanded check radius for Outer Lane cars
             if (distToCenter < 8.0 && this.lastDecisionTile !== tileKey && currentMapType !== 'default') {
                 this.lastDecisionTile = tileKey;
                 this.makeTurnDecision(tileX, tileZ);
@@ -326,44 +327,32 @@ document.addEventListener('DOMContentLoaded', () => {
             while (angleDiff > Math.PI) angleDiff -= 2*Math.PI;
 
             if (Math.abs(angleDiff) > 0.1) {
-                // Turning
                 this.body.setAngularVelocity(angleDiff * 3.0);
                 const forward = this.body.getWorldVector(pl.Vec2(0, 1));
                 const turnSpeed = this.maxSpeed * 0.4;
                 this.body.setLinearVelocity(forward.mul(turnSpeed / 3.6));
             } else {
-                // Going Straight - Apply Rails Logic
                 this.body.setAngularVelocity(0);
                 const forward = this.body.getWorldVector(pl.Vec2(0, 1));
                 
                 // LANE CORRECTION SYSTEM ("RAILS")
-                // Only apply if we are not in the middle of a turn decision (dist > 6)
                 if (distToCenter > 6.0) {
                     let idealX = tileX;
                     let idealZ = tileZ;
                     const cosA = Math.cos(this.aiTargetAngle);
                     const sinA = Math.sin(this.aiTargetAngle);
 
-                    // Check if North/South
                     if (Math.abs(cosA) > 0.5) {
-                        // North (0): cos=1. Ideal = X + offset (Right side)
-                        // South (PI): cos=-1. Ideal = X - offset (Right side relative to travel)
                         const dir = cosA > 0 ? 1 : -1;
                         idealX = tileX + (dir * this.laneOffset);
-                        
                         const diffX = idealX - pos.x;
                         if (Math.abs(diffX) > 0.2) {
                             const v = this.body.getLinearVelocity();
-                            // Nudge laterally towards lane center
                             this.body.setLinearVelocity(pl.Vec2(v.x + diffX * 4.0 * dt, v.y));
                         }
                     } 
-                    // East/West
                     else {
-                        // West (PI/2): sin=1. Ideal = Z - offset (Right side)
-                        // East (-PI/2): sin=-1. Ideal = Z + offset (Right side)
                         idealZ = tileZ - (sinA * this.laneOffset);
-                        
                         const diffZ = idealZ - pos.y;
                         if (Math.abs(diffZ) > 0.2) {
                             const v = this.body.getLinearVelocity();
@@ -372,7 +361,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
 
-                this.body.setLinearVelocity(forward.mul(this.maxSpeed / 3.6));
+                // Maintain speed if not turning
+                if (vel < this.maxSpeed / 3.6) {
+                    this.body.applyForce(forward.mul(this.power * 2), this.body.getWorldCenter());
+                } else {
+                    this.body.setLinearVelocity(forward.mul(this.maxSpeed / 3.6));
+                }
             }
         }
 
@@ -399,11 +393,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             let selected = null;
 
-            // Strict Action Logic
             if (this.plannedAction === 'left' && left) selected = left;
             else if (this.plannedAction === 'right' && right) selected = right;
             else if (straight) selected = straight;
-            else selected = left || right; // Fallback
+            else selected = left || right;
 
             if (!selected) {
                 const nonU = valid.filter(n => Math.abs(getRel(n.angle) - Math.PI) > 0.1);
@@ -412,12 +405,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             this.aiTargetAngle = selected.angle;
 
-            // Plan next action (Keep traffic mostly organized)
             if (this.plannedAction === 'left') {
-                 // After a left turn, you are generally in the inner lane of the new road
                  this.plannedAction = (Math.random() < 0.3) ? 'left' : 'straight';
             } else if (this.plannedAction === 'right') {
-                 // After a right turn, you are in the outer lane
                  this.plannedAction = (Math.random() < 0.6) ? 'right' : 'straight';
             }
         }
@@ -596,13 +586,13 @@ document.addEventListener('DOMContentLoaded', () => {
             
             let shouldRemove = false;
 
-            // 1. PRIMARY: Hard Radius Check (MOVING OR STUCK)
+            // 1. PRIMARY: Hard Radius Check
             if (dist > spawnRadius) {
                 shouldRemove = true;
             }
 
-            // 2. STUCK Logic (Inside Radius)
-            if (!shouldRemove && car.stuckTimer > 4.0 && dist > 40) {
+            // 2. STUCK Logic (Aggressive removal of stopped cars)
+            if (!shouldRemove && car.stuckTimer > 3.0 && dist > 30) {
                  shouldRemove = true;
             }
 
@@ -654,7 +644,6 @@ document.addEventListener('DOMContentLoaded', () => {
              let turnAction;
              let laneDist;
 
-             // Every 3rd car is a Left-Turn Car (Inner Lane), others are Right-Turn Cars (Outer Lane)
              if (trafficSpawnCounter % 3 === 0) {
                  turnAction = 'left';
                  laneDist = LANE_INNER;
@@ -664,7 +653,6 @@ document.addEventListener('DOMContentLoaded', () => {
              }
 
              if (currentMapType === 'default') {
-                 // Classic Highway Logic (Simplified)
                  const pAngle = player1.body.getAngle();
                  if (Math.abs(pAngle) < 0.1) {
                      if (dz < 0) { 
@@ -684,36 +672,30 @@ document.addEventListener('DOMContentLoaded', () => {
                      }
                  }
              } else {
-                 // City Grid Logic: SMART DIRECTION WITH LANE DISTANCE (RIGHT HAND TRAFFIC)
                  const nN = roadLookup[`${x},${z - BLOCK_SIZE}`];
                  const nS = roadLookup[`${x},${z + BLOCK_SIZE}`];
                  const nE = roadLookup[`${x + BLOCK_SIZE},${z}`];
                  const nW = roadLookup[`${x - BLOCK_SIZE},${z}`];
 
-                 // Determine Orientation
                  const isVert = (nN || nS) && !(nE || nW);
                  const isHorz = (nE || nW) && !(nN || nS);
                  let useVertical = isVert || (!isHorz && Math.abs(dz) > Math.abs(dx));
 
                  if (useVertical) {
                     if (pPos.y > z) { 
-                         // Player is "Above/South" (Higher Y/Z) looking North. Car should drive North.
                          angle = 0; 
-                         x += laneDist; // Right side of road (Positive X relative to center 0)
+                         x += laneDist; 
                     } else {
-                         // Player is "Below/North". Car drives South.
                          angle = Math.PI; 
-                         x -= laneDist; // Right side of road (Negative X relative to center 0)
+                         x -= laneDist;
                     }
                  } else {
                     if (pPos.x > x) { 
-                        // Player is to the Right. Car drives Left (West)
                         angle = -Math.PI/2; 
-                        z += laneDist; // Right side (Positive Z relative to center)
+                        z += laneDist; 
                     } else {
-                        // Player is to the Left. Car drives Right (East)
                         angle = Math.PI/2; 
-                        z -= laneDist; // Right side (Negative Z relative to center)
+                        z -= laneDist; 
                     }
                  }
              }
@@ -980,7 +962,6 @@ document.addEventListener('DOMContentLoaded', () => {
         customMenuGroup.appendChild(div);
     }
 
-    // --- SLIDERS ---
     const gameplayGroup = document.querySelectorAll('#customizeMenu .setting-group')[2]; 
     if(gameplayGroup && !document.getElementById('radiusSlider')) {
         const div = document.createElement('div');
