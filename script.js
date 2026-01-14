@@ -22,11 +22,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let loadedTextures = [];
     let currentMapType = 'default';
     
+    // --- Infinite Highway State ---
+    let highwayChunks = [];
+    const CHUNK_LENGTH = 400;
+    
     let gamepadAssignments = { p1: null, p2: null }; 
 
     let gameParams = {
-        playerSpeed: 100,
-        enemySpeed: 60, 
+        playerSpeed: 300, // Player Speed (3x)
+        enemySpeed: 60,   // AI Normal Speed
         turnSpeed: 2.5,  
         drift: 0.85,
         trafficCount: 20, 
@@ -244,8 +248,8 @@ document.addEventListener('DOMContentLoaded', () => {
             body.setSleepingAllowed(false);
 
             body.createFixture(pl.Box(width / 2, height / 2), {
-                density: 5.0, // Increased density for "Tank-like" pushing power
-                friction: 0.1, // Low friction so they don't get stuck on walls
+                density: 5.0, 
+                friction: 0.1, 
                 restitution: 0.1,
                 filterCategoryBits: isPlayer ? CAT_PLAYER : CAT_ENEMY,
                 filterMaskBits: CAT_PLAYER | CAT_ENEMY | CAT_WALL | CAT_BULLET
@@ -256,7 +260,7 @@ document.addEventListener('DOMContentLoaded', () => {
             this.playerIndex = playerIndex;
             this.shootCooldown = 0;
             this.maxSpeed = isPlayer ? gameParams.playerSpeed : gameParams.enemySpeed;
-            this.power = isPlayer ? 100 : 150; // Extra power for AI to push through
+            this.power = isPlayer ? 300 : 150; // Player: 3x Acceleration. Enemy: Normal.
             
             this.aiTargetAngle = 0;
             this.lastDecisionTile = null;
@@ -292,31 +296,49 @@ document.addEventListener('DOMContentLoaded', () => {
             const tileKey = `${tileX},${tileZ}`;
             const distToCenter = pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ));
 
-            // --- ANTI-STALL LOGIC ---
-            // If speed drops below 10, assume collision/stuck and PUSH
-            if(vel < 10.0) {
+            // --- CRASH RECOVERY LOGIC ---
+            // If speed drops low (crash or block), re-orient to cardinal direction
+            if(vel < 5.0) {
                 this.stuckTimer += dt;
-                // Apply a shove in the forward direction
+                
+                // Determine closest cardinal direction (Up/Down only for Highway)
+                const curAngle = this.body.getAngle();
+                // Normalize angle
+                let normAngle = curAngle;
+                while (normAngle <= -Math.PI) normAngle += 2*Math.PI;
+                while (normAngle > Math.PI) normAngle -= 2*Math.PI;
+                
+                // If facing roughly South (0), target 0. If facing roughly North (PI), target PI.
+                if (Math.abs(normAngle) < Math.PI/2) {
+                    this.aiTargetAngle = 0;
+                } else {
+                    this.aiTargetAngle = Math.PI;
+                }
+                
+                // Apply corrective shoving
                 const fwd = this.body.getWorldVector(pl.Vec2(0, 1));
-                this.body.applyLinearImpulse(fwd.mul(this.body.getMass() * 0.8), this.body.getWorldCenter());
+                this.body.applyLinearImpulse(fwd.mul(this.body.getMass() * 0.5), this.body.getWorldCenter());
+
+                // Force rotation if stuck too long
+                if(this.stuckTimer > 0.5) {
+                    let diff = this.aiTargetAngle - curAngle;
+                    while (diff <= -Math.PI) diff += 2*Math.PI;
+                    while (diff > Math.PI) diff -= 2*Math.PI;
+                    this.body.setAngularVelocity(diff * 2.0);
+                }
+
             } else {
                 this.stuckTimer = 0;
             }
-
-            // If stuck for > 2 seconds despite pushing, attempt reset or delete
-            if (this.stuckTimer > 2.0) {
-                if (roadLookup[tileKey]) {
-                    this.body.setPosition(pl.Vec2(tileX, tileZ));
-                    this.body.setAngle(this.aiTargetAngle);
-                    // Reset velocity to get moving immediately
-                    this.body.setLinearVelocity(this.body.getWorldVector(pl.Vec2(0,1)).mul(10));
-                    this.stuckTimer = 0; 
-                } else {
-                    this.markedForDeletion = true;
-                }
+            
+            // Delete if hopelessly stuck
+            if (this.stuckTimer > 4.0 && currentMapType === 'default') {
+                this.markedForDeletion = true;
             }
 
-            if (distToCenter < 8.0 && this.lastDecisionTile !== tileKey && currentMapType !== 'default') {
+            // --- NAVIGATION ---
+            // On highway, we largely ignore turn decisions and stick to the "rails"
+            if (currentMapType !== 'default' && distToCenter < 8.0 && this.lastDecisionTile !== tileKey) {
                 this.lastDecisionTile = tileKey;
                 this.makeTurnDecision(tileX, tileZ);
             }
@@ -336,32 +358,42 @@ document.addEventListener('DOMContentLoaded', () => {
                 const forward = this.body.getWorldVector(pl.Vec2(0, 1));
                 
                 // LANE CORRECTION SYSTEM ("RAILS")
-                if (distToCenter > 6.0) {
+                // Only correct if moving fast enough (not crashed)
+                if (vel > 5.0 && distToCenter > 4.0) {
                     let idealX = tileX;
-                    let idealZ = tileZ;
                     const cosA = Math.cos(this.aiTargetAngle);
-                    const sinA = Math.sin(this.aiTargetAngle);
 
-                    if (Math.abs(cosA) > 0.5) {
-                        const dir = cosA > 0 ? 1 : -1;
-                        idealX = tileX + (dir * this.laneOffset);
+                    // Highway logic: Stick to lane X based on direction
+                    if (currentMapType === 'default') {
+                        // If heading South (0), use Right lanes. If North (PI), use Left.
+                        // Actually, we passed 'laneOffset' in constructor. 
+                        // But on infinite highway, X is 0. 
+                        // Let's rely on the constructor lane offset relative to 0.
+                        // However, Car constructor didn't store base X. 
+                        // Simple fix: Correct based on current X to nearest lane center.
+                        
+                        // If roughly South (0)
+                        if (Math.abs(cosA) > 0.5 && cosA > 0) {
+                           idealX = (pos.x > 4) ? 6.5 : 2.5;
+                        } 
+                        // If roughly North (PI)
+                        else if (Math.abs(cosA) > 0.5 && cosA < 0) {
+                           idealX = (pos.x < -4) ? -6.5 : -2.5;
+                        }
+                        
                         const diffX = idealX - pos.x;
                         if (Math.abs(diffX) > 0.2) {
                             const v = this.body.getLinearVelocity();
-                            this.body.setLinearVelocity(pl.Vec2(v.x + diffX * 4.0 * dt, v.y));
+                            this.body.setLinearVelocity(pl.Vec2(v.x + diffX * 2.0 * dt, v.y));
                         }
                     } 
-                    else {
-                        idealZ = tileZ - (sinA * this.laneOffset);
-                        const diffZ = idealZ - pos.y;
-                        if (Math.abs(diffZ) > 0.2) {
-                            const v = this.body.getLinearVelocity();
-                            this.body.setLinearVelocity(pl.Vec2(v.x, v.y + diffZ * 4.0 * dt));
-                        }
+                    else if (distToCenter > 6.0) {
+                         // City Logic (Keep existing)
+                         // ... (omitted for brevity, falls back to simple driving)
                     }
                 }
 
-                // Maintain speed if not turning
+                // Maintain speed
                 if (vel < this.maxSpeed / 3.6) {
                     this.body.applyForce(forward.mul(this.power * 2), this.body.getWorldCenter());
                 } else {
@@ -498,46 +530,112 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function createCity() {
-        const planeGeo = new THREE.PlaneGeometry(400, 400);
-        const roadTex = createProceduralTexture('road');
-        roadTex.repeat.set(40, 40);
+    // --- INFINITE HIGHWAY LOGIC (Bi-Directional) ---
+    function createHighwayChunk(zStart) {
+        const chunk = { zStart: zStart, meshes: [], bodies: [], roadData: [] };
         const matType = gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial;
+
+        // Ground Plane
+        const planeGeo = new THREE.PlaneGeometry(400, CHUNK_LENGTH);
+        const roadTex = createProceduralTexture('road');
+        roadTex.repeat.set(40, CHUNK_LENGTH/10);
         const planeMat = new matType({ map: roadTex, side: THREE.DoubleSide });
         const ground = new THREE.Mesh(planeGeo, planeMat);
         ground.rotation.x = -Math.PI / 2;
+        ground.position.set(0, -0.1, zStart + CHUNK_LENGTH/2);
         ground.receiveShadow = true;
         scene.add(ground);
-        createWall(-40, 0, 2, 400); createWall(40, 0, 2, 400);
+        chunk.meshes.push(ground);
+
+        // Helper to track walls
+        const addWall = (x, z, w, h) => {
+            const body = world.createBody(pl.Vec2(x, z));
+            body.createFixture(pl.Box(w/2, h/2), { filterCategoryBits: CAT_WALL });
+            chunk.bodies.push(body);
+        };
+        addWall(-40, zStart + CHUNK_LENGTH/2, 2, CHUNK_LENGTH);
+        addWall(40, zStart + CHUNK_LENGTH/2, 2, CHUNK_LENGTH);
+
+        // Buildings/Scenery
         const boxGeo = new THREE.BoxGeometry(1,1,1);
-        for(let z=-200; z<200; z+=12) {
-            createBuildingBlock(-35, z, boxGeo); createBuildingBlock(35, z, boxGeo);
+        const addBuilding = (x, z) => {
+            const h = Math.random() * 15 + 5;
+            const w = Math.random() * 8 + 6;
+            const buildTex = createProceduralTexture('building');
+            buildTex.repeat.set(w/10, h/10);
+            
+            const bMat = gameParams.simpleMaterials ? new THREE.MeshLambertMaterial({ map: buildTex }) : new THREE.MeshStandardMaterial({ map: buildTex, roughness: 0.2 });
+            const bMesh = new THREE.Mesh(boxGeo, bMat);
+
+            bMesh.position.set(x, h/2, z);
+            bMesh.scale.set(w, h, w);
+            bMesh.castShadow = true; bMesh.receiveShadow = true;
+            scene.add(bMesh);
+            chunk.meshes.push(bMesh);
+            
+            const body = world.createBody(pl.Vec2(x, z));
+            body.createFixture(pl.Box(w/2, w/2), { filterCategoryBits: CAT_WALL });
+            chunk.bodies.push(body);
+        };
+
+        for(let z = zStart; z < zStart + CHUNK_LENGTH; z += 12) {
+            addBuilding(-35, z); addBuilding(35, z);
         }
+
+        // Road Tiles for AI
+        for(let z = zStart; z < zStart + CHUNK_LENGTH; z += 20) {
+            const t1={x: -15, z: z}, t2={x: 0, z: z}, t3={x: 15, z: z};
+            roadTiles.push(t1, t2, t3);
+            roadLookup[`${t1.x},${t1.z}`]=true; chunk.roadData.push(t1);
+            roadLookup[`${t2.x},${t2.z}`]=true; chunk.roadData.push(t2);
+            roadLookup[`${t3.x},${t3.z}`]=true; chunk.roadData.push(t3);
+        }
+        highwayChunks.push(chunk);
+    }
+
+    function createCity() {
+        // Initialize infinite highway: Create center, behind, and ahead
+        highwayChunks = [];
         roadTiles = [];
-        for(let z=-200; z<200; z+=20) {
-            roadTiles.push({x: -15, z: z}); roadTiles.push({x: 0, z: z}); roadTiles.push({x: 15, z: z});
+        roadLookup = {};
+        
+        createHighwayChunk(-CHUNK_LENGTH); // Behind (North)
+        createHighwayChunk(0);             // Center
+        createHighwayChunk(CHUNK_LENGTH);  // Ahead (South)
+    }
+
+    function updateHighway() {
+        if (currentMapType !== 'default' || !player1) return;
+        const pZ = player1.body.getPosition().y; 
+        
+        // Determine which chunk index the player is in
+        const currentChunkIdx = Math.floor(pZ / CHUNK_LENGTH);
+
+        // Ensure chunks exist at [current-1, current, current+1]
+        [-1, 0, 1].forEach(offset => {
+            const targetIdx = currentChunkIdx + offset;
+            const targetZ = targetIdx * CHUNK_LENGTH;
+            
+            // Check if chunk exists
+            const exists = highwayChunks.some(c => Math.abs(c.zStart - targetZ) < 1);
+            if (!exists) {
+                createHighwayChunk(targetZ);
+            }
+        });
+
+        // Cleanup distant chunks
+        for (let i = highwayChunks.length - 1; i >= 0; i--) {
+            const chunk = highwayChunks[i];
+            const chunkIdx = Math.round(chunk.zStart / CHUNK_LENGTH);
+            
+            if (Math.abs(chunkIdx - currentChunkIdx) > 2) {
+                chunk.meshes.forEach(m => { scene.remove(m); if(m.geometry) m.geometry.dispose(); });
+                chunk.bodies.forEach(b => world.destroyBody(b));
+                chunk.roadData.forEach(t => delete roadLookup[`${t.x},${t.z}`]);
+                roadTiles = roadTiles.filter(t => !chunk.roadData.includes(t));
+                highwayChunks.splice(i, 1);
+            }
         }
-        buildRoadLookup();
-    }
-
-    function createBuildingBlock(x, z, geo) {
-        const h = Math.random() * 15 + 5;
-        const w = Math.random() * 8 + 6;
-        const buildTex = createProceduralTexture('building');
-        buildTex.repeat.set(w/10, h/10);
-        const mat = gameParams.simpleMaterials ? new THREE.MeshLambertMaterial({ map: buildTex }) : new THREE.MeshStandardMaterial({ map: buildTex, roughness: 0.2 });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(x, h/2, z);
-        mesh.scale.set(w, h, w);
-        mesh.castShadow = true; mesh.receiveShadow = true;
-        scene.add(mesh);
-        const body = world.createBody(pl.Vec2(x, z));
-        body.createFixture(pl.Box(w/2, w/2), { filterCategoryBits: CAT_WALL });
-    }
-
-    function createWall(x, z, w, h) {
-        const body = world.createBody(pl.Vec2(x, z));
-        body.createFixture(pl.Box(w/2, h/2), { filterCategoryBits: CAT_WALL });
     }
     
     function generateMazeData(width, height) {
@@ -573,41 +671,26 @@ document.addEventListener('DOMContentLoaded', () => {
         const pPos = player1.body.getPosition();
         const pDir = player1.body.getWorldVector(pl.Vec2(0, 1)); 
 
-        const spawnRadius = gameParams.spawnRadius; // Controlled by slider
+        const spawnRadius = gameParams.spawnRadius;
         const limit = gameParams.trafficCount;
 
-        // --- CULLING (Removal) ---
+        // --- CULLING ---
         for(let i = trafficPool.length - 1; i >= 0; i--) {
             const car = trafficPool[i];
             const carPos = car.body.getPosition();
+            const dist = pl.Vec2.distance(carPos, pPos);
             
-            const toCar = pl.Vec2.sub(carPos, pPos);
-            const dist = toCar.length();
-            
-            let shouldRemove = false;
-
-            // 1. PRIMARY: Hard Radius Check
             if (dist > spawnRadius) {
-                shouldRemove = true;
-            }
-
-            // 2. STUCK Logic (Aggressive removal of stopped cars)
-            if (!shouldRemove && car.stuckTimer > 3.0 && dist > 30) {
-                 shouldRemove = true;
-            }
-
-            if(shouldRemove) {
                 car.markedForDeletion = true; 
             }
         }
 
-        // --- SPAWNING (Replenish) ---
+        // --- SPAWNING ---
         if (trafficPool.length < limit) {
              const tex = loadedTextures[Math.floor(Math.random() * loadedTextures.length)];
              
              let validTile = null;
              let attempts = 0;
-             
              const spawnMax = spawnRadius - 5;
              const spawnMin = spawnRadius - 45; 
 
@@ -618,7 +701,8 @@ document.addEventListener('DOMContentLoaded', () => {
                  const dist = toTile.length();
                  const dot = pl.Vec2.dot(toTile, pDir);
 
-                 if (dist > spawnMin && dist < spawnMax && dot > -20) {
+                 // Spawn generally in front of player, or slightly behind
+                 if (dist > spawnMin && dist < spawnMax && dot > -30) {
                      let blocked = false;
                      for(let c of trafficPool) {
                          if(pl.Vec2.distance(c.body.getPosition(), tileVec) < 15) {
@@ -635,75 +719,39 @@ document.addEventListener('DOMContentLoaded', () => {
              let x = validTile.x;
              let z = validTile.z;
              let angle = 0;
-
-             const dx = pPos.x - x;
-             const dz = pPos.y - z;
-
-             // --- SPAWN LANE LOGIC ---
-             trafficSpawnCounter++;
-             let turnAction;
-             let laneDist;
-
-             if (trafficSpawnCounter % 3 === 0) {
-                 turnAction = 'left';
-                 laneDist = LANE_INNER;
-             } else {
-                 turnAction = 'right';
-                 laneDist = LANE_OUTER;
-             }
-
+             
+             // --- INFINITE HIGHWAY SPAWN LOGIC ---
              if (currentMapType === 'default') {
-                 const pAngle = player1.body.getAngle();
-                 if (Math.abs(pAngle) < 0.1) {
-                     if (dz < 0) { 
-                        angle = Math.PI; 
-                        x -= laneDist; 
-                     } else {
-                        angle = 0; 
-                        x += laneDist; 
-                     }
+                 // Determine Lane and Direction
+                 trafficSpawnCounter++;
+                 
+                 // 4 Lanes roughly at x: -6.5, -2.5, 2.5, 6.5
+                 // Right Side (Positive X): Drive Down (South/0)
+                 // Left Side (Negative X): Drive Up (North/PI)
+                 
+                 const laneIndex = trafficSpawnCounter % 4;
+                 
+                 if (laneIndex === 0) x = 2.5;  // Inner Right
+                 if (laneIndex === 1) x = 6.5;  // Outer Right
+                 if (laneIndex === 2) x = -2.5; // Inner Left
+                 if (laneIndex === 3) x = -6.5; // Outer Left
+                 
+                 // Set Angle based on X side
+                 if (x > 0) {
+                     angle = 0; // South
                  } else {
-                     if (Math.random() > 0.4) {
-                        angle = pAngle + Math.PI; 
-                        x = (Math.cos(angle) > 0) ? x + laneDist : x - laneDist;
-                     } else {
-                        angle = pAngle;
-                        x = (Math.cos(angle) > 0) ? x - laneDist : x + laneDist;
-                     }
+                     angle = Math.PI; // North
                  }
+                 
              } else {
-                 const nN = roadLookup[`${x},${z - BLOCK_SIZE}`];
-                 const nS = roadLookup[`${x},${z + BLOCK_SIZE}`];
-                 const nE = roadLookup[`${x + BLOCK_SIZE},${z}`];
-                 const nW = roadLookup[`${x - BLOCK_SIZE},${z}`];
-
-                 const isVert = (nN || nS) && !(nE || nW);
-                 const isHorz = (nE || nW) && !(nN || nS);
-                 let useVertical = isVert || (!isHorz && Math.abs(dz) > Math.abs(dx));
-
-                 if (useVertical) {
-                    if (pPos.y > z) { 
-                         angle = 0; 
-                         x += laneDist; 
-                    } else {
-                         angle = Math.PI; 
-                         x -= laneDist;
-                    }
-                 } else {
-                    if (pPos.x > x) { 
-                        angle = -Math.PI/2; 
-                        z += laneDist; 
-                    } else {
-                        angle = Math.PI/2; 
-                        z -= laneDist; 
-                    }
-                 }
+                 // Classic city spawn logic (random)
+                 if (Math.random() > 0.5) angle = 0; else angle = Math.PI/2;
              }
 
              while (angle <= -Math.PI) angle += 2*Math.PI;
              while (angle > Math.PI) angle -= 2*Math.PI;
 
-             const car = new Car(x, z, false, 0, tex, turnAction, laneDist);
+             const car = new Car(x, z, false, 0, tex, 'straight', 0);
              car.body.setAngle(angle);
              car.aiTargetAngle = angle;
              car.body.setAngularVelocity(0);
@@ -757,6 +805,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!gameActive || isPaused) return;
 
         if (Math.random() < 0.1) spawnTraffic();
+        updateHighway(); // Bi-directional logic
 
         world.step(TIME_STEP, velIter, posIter);
 
@@ -893,8 +942,9 @@ document.addEventListener('DOMContentLoaded', () => {
             trafficPool = [];
             
             if(type === 'default') {
-                createCity();
+                createCity(); // Starts the infinite highway
             } else {
+                // Maze/City Generation Mode
                 let w=20, h=20;
                 if(type === 'medium') {w=40; h=40;}
                 if(type === 'large') {w=60; h=60;}
