@@ -42,7 +42,13 @@ document.addEventListener('DOMContentLoaded', () => {
         cameraHeight: 60,
         cameraFOV: 50,
         topDownMode: false,
-        cameraRotate: false 
+        cameraRotate: false,
+        
+        // --- GTA1 Arcade Physics Params ---
+        gtaGrip: 0.12,          // Lower = more ice/drift. 0.12 is snappy but allows slide.
+        gtaTurnFactor: 8.5,     // Steering strength (UPDATED to 8.5)
+        gtaDrag: 0.985,         // Rolling resistance
+        gtaHandbrakeGrip: 0.35  // Grip multiplier when handbraking
     };
     
     let p1Score = 0;
@@ -182,6 +188,18 @@ document.addEventListener('DOMContentLoaded', () => {
         return currentRightNormal.mul(lateralMag);
     }
 
+    // --- Helpers ---
+    function clamp(v, min, max) {
+        return Math.max(min, Math.min(max, v));
+    }
+
+    function angleDiff(a, b) {
+        let d = a - b;
+        while (d <= -Math.PI) d += Math.PI * 2;
+        while (d > Math.PI) d -= Math.PI * 2;
+        return d;
+    }
+
     class Entity {
         constructor(mesh, body) {
             this.mesh = mesh;
@@ -240,7 +258,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const body = world.createBody({
                 type: 'dynamic',
                 position: pl.Vec2(x, y),
-                linearDamping: 0.5, 
+                linearDamping: 0.0, // Managed manually now
                 angularDamping: 2.0 
             });
 
@@ -269,27 +287,66 @@ document.addEventListener('DOMContentLoaded', () => {
             this.aiCounter = 0; 
             this.stuckTimer = 0; 
             this.resetTimer = 0; 
+
+            // --- GTA1 Physics State ---
+            this.speed = 0;
+            this.vx = 0;
+            this.vy = 0;
+            this.handbrake = false;
         }
 
         update(dt) {
             super.update();
             if (this.shootCooldown > 0) this.shootCooldown -= dt;
             
-            const lateralVel = getLateralVelocity(this.body);
-            const driftFactor = this.isPlayer ? gameParams.drift : 1.0; 
-            const impulse = lateralVel.neg().mul(this.body.getMass() * driftFactor);
-            this.body.applyLinearImpulse(impulse, this.body.getWorldCenter());
-
-            this.body.applyAngularImpulse( -0.1 * this.body.getAngularVelocity() * this.body.getMass() );
             this.maxSpeed = this.isPlayer ? gameParams.playerSpeed : gameParams.enemySpeed;
+            
+            // --- GTA1 DRAG ---
+            this.speed *= gameParams.gtaDrag;
+
+            // --- FORWARD VECTOR ---
+            // In Planck/Box2D: Angle 0 is usually East (+X). However, in this setup Y seems to be forward.
+            // Using standard math: X = -sin(angle), Y = cos(angle) corresponds to North=0.
+            const angle = this.body.getAngle();
+            const fx = -Math.sin(angle); 
+            const fy = Math.cos(angle);
+
+            // --- TARGET VELOCITY ---
+            // Where the car *wants* to go based on wheel direction
+            const targetVx = fx * this.speed;
+            const targetVy = fy * this.speed;
+
+            // --- GRIP / DRIFT ---
+            let grip = gameParams.gtaGrip;
+            if (this.handbrake) grip *= gameParams.gtaHandbrakeGrip;
+
+            // Blend current velocity towards target velocity
+            // This creates the "slide" effect. Lower grip = slower convergence = more drift.
+            this.vx += (targetVx - this.vx) * grip;
+            this.vy += (targetVy - this.vy) * grip;
+
+            // --- APPLY TO PLANCK ---
+            this.body.setLinearVelocity(pl.Vec2(this.vx, this.vy));
+
+            // --- KILL ANGULAR DRIFT ---
+            // Stop spinning if not steering
+            this.body.setAngularVelocity(
+                this.body.getAngularVelocity() * 0.85
+            );
+
+            // --- SPEED CAP ---
+            const max = this.maxSpeed / 3.6; // convert km/h roughly to units
+            this.speed = clamp(this.speed, -max * 0.5, max);
         }
 
         aiUpdate(dt) {
             if (this.isPlayer) return;
 
             const pos = this.body.getPosition();
-            const velVec = this.body.getLinearVelocity();
-            const vel = velVec.length();
+            
+            // NOTE: Use actual linear velocity magnitude for logic checks, not this.speed
+            // because this.speed is the "engine" speed, not physical speed (crashes etc)
+            const physVel = this.body.getLinearVelocity().length();
             
             const tileX = Math.round(pos.x / BLOCK_SIZE) * BLOCK_SIZE;
             const tileZ = Math.round(pos.y / BLOCK_SIZE) * BLOCK_SIZE;
@@ -297,33 +354,26 @@ document.addEventListener('DOMContentLoaded', () => {
             const distToCenter = pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ));
 
             // --- CRASH RECOVERY LOGIC ---
-            // If speed drops low (crash or block), re-orient to cardinal direction
-            if(vel < 5.0) {
+            if(physVel < 2.0) {
                 this.stuckTimer += dt;
                 
-                // Determine closest cardinal direction (Up/Down only for Highway)
                 const curAngle = this.body.getAngle();
-                // Normalize angle
                 let normAngle = curAngle;
                 while (normAngle <= -Math.PI) normAngle += 2*Math.PI;
                 while (normAngle > Math.PI) normAngle -= 2*Math.PI;
                 
-                // If facing roughly South (0), target 0. If facing roughly North (PI), target PI.
                 if (Math.abs(normAngle) < Math.PI/2) {
                     this.aiTargetAngle = 0;
                 } else {
                     this.aiTargetAngle = Math.PI;
                 }
                 
-                // Apply corrective shoving
-                const fwd = this.body.getWorldVector(pl.Vec2(0, 1));
-                this.body.applyLinearImpulse(fwd.mul(this.body.getMass() * 0.5), this.body.getWorldCenter());
+                // Shove
+                this.speed = 20; // Kickstart engine speed
 
                 // Force rotation if stuck too long
                 if(this.stuckTimer > 0.5) {
-                    let diff = this.aiTargetAngle - curAngle;
-                    while (diff <= -Math.PI) diff += 2*Math.PI;
-                    while (diff > Math.PI) diff -= 2*Math.PI;
+                    let diff = angleDiff(this.aiTargetAngle, curAngle);
                     this.body.setAngularVelocity(diff * 2.0);
                 }
 
@@ -331,74 +381,56 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.stuckTimer = 0;
             }
             
-            // Delete if hopelessly stuck
             if (this.stuckTimer > 4.0 && currentMapType === 'default') {
                 this.markedForDeletion = true;
             }
 
             // --- NAVIGATION ---
-            // On highway, we largely ignore turn decisions and stick to the "rails"
             if (currentMapType !== 'default' && distToCenter < 8.0 && this.lastDecisionTile !== tileKey) {
                 this.lastDecisionTile = tileKey;
                 this.makeTurnDecision(tileX, tileZ);
             }
 
+            // --- AI DRIVING (GTA STYLE) ---
             const currentAngle = this.body.getAngle();
-            let angleDiff = this.aiTargetAngle - currentAngle;
-            while (angleDiff <= -Math.PI) angleDiff += 2*Math.PI;
-            while (angleDiff > Math.PI) angleDiff -= 2*Math.PI;
+            let angleDiffVal = angleDiff(this.aiTargetAngle, currentAngle);
 
-            if (Math.abs(angleDiff) > 0.1) {
-                this.body.setAngularVelocity(angleDiff * 3.0);
-                const forward = this.body.getWorldVector(pl.Vec2(0, 1));
-                const turnSpeed = this.maxSpeed * 0.4;
-                this.body.setLinearVelocity(forward.mul(turnSpeed / 3.6));
-            } else {
-                this.body.setAngularVelocity(0);
-                const forward = this.body.getWorldVector(pl.Vec2(0, 1));
+            // AI Steering
+            if (Math.abs(angleDiffVal) > 0.1) {
+                // Steer towards target
+                const turnRate = 3.0 * dt; // Turn speed
+                const turnAmt = clamp(angleDiffVal, -turnRate, turnRate);
+                this.body.setAngle(currentAngle + turnAmt);
                 
-                // LANE CORRECTION SYSTEM ("RAILS")
-                // Only correct if moving fast enough (not crashed)
-                if (vel > 5.0 && distToCenter > 4.0) {
+                // Slow down for turns
+                this.speed = (this.maxSpeed / 3.6) * 0.6; 
+            } else {
+                // Straighten out
+                this.body.setAngle(currentAngle + angleDiffVal * 0.1);
+                
+                // LANE CORRECTION SYSTEM
+                if (physVel > 5.0 && distToCenter > 4.0) {
                     let idealX = tileX;
                     const cosA = Math.cos(this.aiTargetAngle);
 
-                    // Highway logic: Stick to lane X based on direction
                     if (currentMapType === 'default') {
-                        // If heading South (0), use Right lanes. If North (PI), use Left.
-                        // Actually, we passed 'laneOffset' in constructor. 
-                        // But on infinite highway, X is 0. 
-                        // Let's rely on the constructor lane offset relative to 0.
-                        // However, Car constructor didn't store base X. 
-                        // Simple fix: Correct based on current X to nearest lane center.
-                        
-                        // If roughly South (0)
                         if (Math.abs(cosA) > 0.5 && cosA > 0) {
                            idealX = (pos.x > 4) ? 6.5 : 2.5;
                         } 
-                        // If roughly North (PI)
                         else if (Math.abs(cosA) > 0.5 && cosA < 0) {
                            idealX = (pos.x < -4) ? -6.5 : -2.5;
                         }
                         
                         const diffX = idealX - pos.x;
                         if (Math.abs(diffX) > 0.2) {
-                            const v = this.body.getLinearVelocity();
-                            this.body.setLinearVelocity(pl.Vec2(v.x + diffX * 2.0 * dt, v.y));
+                            // Slide laterally artificially for lane change
+                            this.vx += diffX * dt; 
                         }
                     } 
-                    else if (distToCenter > 6.0) {
-                         // City Logic (Keep existing)
-                         // ... (omitted for brevity, falls back to simple driving)
-                    }
                 }
 
-                // Maintain speed
-                if (vel < this.maxSpeed / 3.6) {
-                    this.body.applyForce(forward.mul(this.power * 2), this.body.getWorldCenter());
-                } else {
-                    this.body.setLinearVelocity(forward.mul(this.maxSpeed / 3.6));
-                }
+                // Full Throttle
+                this.speed = this.maxSpeed / 3.6;
             }
         }
 
@@ -412,12 +444,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const valid = neighbors.filter(n => roadLookup[`${n.x},${n.z}`]);
             if (valid.length === 0) return; 
 
-            const getRel = (target) => {
-                let diff = target - this.aiTargetAngle;
-                while (diff <= -Math.PI) diff += 2*Math.PI;
-                while (diff > Math.PI) diff -= 2*Math.PI;
-                return diff;
-            };
+            const getRel = (target) => angleDiff(target, this.aiTargetAngle);
 
             const straight = valid.find(n => Math.abs(getRel(n.angle)) < 0.1);
             const left     = valid.find(n => Math.abs(getRel(n.angle) - Math.PI/2) < 0.1); 
@@ -445,33 +472,60 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         drive(throttle, steer) {
-            if (steer !== 0) {
-                const turnForce = gameParams.turnSpeed * (throttle < 0 ? 1 : -1); 
-                this.body.setAngularVelocity(steer * -turnForce);
-            } else {
-                this.body.setAngularVelocity(0);
+            // --- HAND BRAKE STATE ---
+            this.handbrake = keys[' '] || keys['shift'];
+
+            // --- ACCELERATION ---
+            // Simple scalar addition
+            const accel = this.power * 0.002;
+            if (throttle !== 0) {
+                this.speed += throttle * accel;
             }
 
-            if (throttle !== 0) {
-                const forwardNormal = this.body.getWorldVector(pl.Vec2(0, 1));
-                const currentSpeed = pl.Vec2.dot(this.body.getLinearVelocity(), forwardNormal);
-                if (Math.abs(currentSpeed) < this.maxSpeed) {
-                    const force = forwardNormal.mul(throttle * this.power);
-                    this.body.applyForce(force, this.body.getWorldCenter());
-                }
+            // --- TURNING (Speed Dependent) ---
+            // Only turn if moving faster than a crawl
+            if (Math.abs(this.speed) > 0.1) {
+                const maxVelUnit = this.maxSpeed / 3.6;
+                const ratio = Math.abs(this.speed) / maxVelUnit;
+                
+                // turn = steer * factor * speedRatio * dt
+                // Applying dt factor (0.016) implicitly here by tweaking the constant or just relying on frame rate.
+                // Using gameParams.gtaTurnFactor * dt-like scalar
+                const turn = steer * gameParams.gtaTurnFactor * ratio * 0.02;
+
+                // Adjust Angle
+                // If reversing, invert steering for intuitive controls
+                const dir = this.speed > 0 ? 1 : -1;
+                
+                this.body.setAngle(
+                    this.body.getAngle() - (turn * dir)
+                );
             }
         }
 
         shoot() {
             if (this.shootCooldown > 0) return;
             const pos = this.body.getPosition();
-            const fwd = this.body.getWorldVector(pl.Vec2(0, 1));
-            const right = this.body.getWorldVector(pl.Vec2(1, 0));
+            const angle = this.body.getAngle();
+            const fwd = { x: -Math.sin(angle), y: Math.cos(angle) };
+            const right = { x: Math.cos(angle), y: Math.sin(angle) };
+            
             const gunOffset = 0.6; 
             const spawnDist = 3.0; 
             const speed = 60;
-            createBullet(pos.x + fwd.x*spawnDist - right.x*gunOffset, pos.y + fwd.y*spawnDist - right.y*gunOffset, fwd.x*speed, fwd.y*speed, this.playerIndex);
-            createBullet(pos.x + fwd.x*spawnDist + right.x*gunOffset, pos.y + fwd.y*spawnDist + right.y*gunOffset, fwd.x*speed, fwd.y*speed, this.playerIndex);
+            
+            createBullet(
+                pos.x + fwd.x*spawnDist - right.x*gunOffset, 
+                pos.y + fwd.y*spawnDist - right.y*gunOffset, 
+                fwd.x*speed, fwd.y*speed, 
+                this.playerIndex
+            );
+            createBullet(
+                pos.x + fwd.x*spawnDist + right.x*gunOffset, 
+                pos.y + fwd.y*spawnDist + right.y*gunOffset, 
+                fwd.x*speed, fwd.y*speed, 
+                this.playerIndex
+            );
             this.shootCooldown = 0.2;
         }
     }
@@ -669,7 +723,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (loadedTextures.length === 0 || !player1) return;
         
         const pPos = player1.body.getPosition();
-        const pDir = player1.body.getWorldVector(pl.Vec2(0, 1)); 
+        // In updated physics, use mesh rotation or store fwd vector, but simple math works
+        const pAngle = player1.body.getAngle();
+        const pDir = pl.Vec2(-Math.sin(pAngle), Math.cos(pAngle));
 
         const spawnRadius = gameParams.spawnRadius;
         const limit = gameParams.trafficCount;
@@ -722,13 +778,7 @@ document.addEventListener('DOMContentLoaded', () => {
              
              // --- INFINITE HIGHWAY SPAWN LOGIC ---
              if (currentMapType === 'default') {
-                 // Determine Lane and Direction
                  trafficSpawnCounter++;
-                 
-                 // 4 Lanes roughly at x: -6.5, -2.5, 2.5, 6.5
-                 // Right Side (Positive X): Drive Down (South/0)
-                 // Left Side (Negative X): Drive Up (North/PI)
-                 
                  const laneIndex = trafficSpawnCounter % 4;
                  
                  if (laneIndex === 0) x = 2.5;  // Inner Right
@@ -736,15 +786,10 @@ document.addEventListener('DOMContentLoaded', () => {
                  if (laneIndex === 2) x = -2.5; // Inner Left
                  if (laneIndex === 3) x = -6.5; // Outer Left
                  
-                 // Set Angle based on X side
-                 if (x > 0) {
-                     angle = 0; // South
-                 } else {
-                     angle = Math.PI; // North
-                 }
+                 if (x > 0) angle = 0; // South
+                 else angle = Math.PI; // North
                  
              } else {
-                 // Classic city spawn logic (random)
                  if (Math.random() > 0.5) angle = 0; else angle = Math.PI/2;
              }
 
@@ -754,10 +799,8 @@ document.addEventListener('DOMContentLoaded', () => {
              const car = new Car(x, z, false, 0, tex, 'straight', 0);
              car.body.setAngle(angle);
              car.aiTargetAngle = angle;
-             car.body.setAngularVelocity(0);
              car.body.setAwake(true);
-             const fwd = car.body.getWorldVector(pl.Vec2(0, 1));
-             car.body.setLinearVelocity(fwd.mul(gameParams.enemySpeed / 3.6));
+             car.speed = gameParams.enemySpeed / 3.6; // Set scalar speed for new physics
              
              entities.push(car);
              trafficPool.push(car);
@@ -770,6 +813,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const entA = entities.find(e => e.body === a);
         const entB = entities.find(e => e.body === b);
         if(!entA || !entB) return;
+
+        // --- GTA1 BOUNCE EFFECT ---
+        if (entA instanceof Car || entB instanceof Car) {
+            const car = entA instanceof Car ? entA : entB;
+            // Cut speed drastically on impact
+            car.speed *= 0.3;
+            // Add a slight random spin to simulate loss of control
+            car.body.setAngle(
+                car.body.getAngle() + (Math.random() - 0.5) * 0.4
+            );
+        }
 
         if(entA.isBullet || entB.isBullet) {
             const bullet = entA.isBullet ? entA : entB;
@@ -823,11 +877,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (player1) {
             let throttle = 0, steer = 0, shoot = false;
             if (keys['arrowup']) throttle = 1; if (keys['arrowdown']) throttle = -1;
-            if (keys['arrowleft']) steer = -1; if (keys['arrowright']) steer = 1;
-            if (keys[' ']) shoot = true;
+            
+            // --- INVERTED STEERING (Requested) ---
+            // Left key now produces Positive steer (1) -> Turns Right
+            // Right key now produces Negative steer (-1) -> Turns Left
+            if (keys['arrowleft']) steer = 1; 
+            if (keys['arrowright']) steer = -1; 
+
+            if (keys['control']) shoot = true; 
             if (gamepadAssignments.p1 !== null && gamepads[gamepadAssignments.p1]) {
                 const gp = gamepads[gamepadAssignments.p1];
-                if (Math.abs(gp.axes[0]) > 0.2) steer = gp.axes[0];
+                if (Math.abs(gp.axes[0]) > 0.2) steer = -gp.axes[0]; // Inverted Axis
                 if (gp.buttons[0]?.pressed || gp.buttons[12]?.pressed) throttle = 1;
                 if (gp.buttons[13]?.pressed || gp.axes[1] > 0.5) throttle = -1;
                 if (gp.buttons[1]?.pressed || gp.buttons[2]?.pressed) shoot = true;
@@ -839,11 +899,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (player2) {
             let throttle = 0, steer = 0, shoot = false;
             if (keys['w']) throttle = 1; if (keys['s']) throttle = -1;
-            if (keys['a']) steer = -1; if (keys['d']) steer = 1;
+            
+            // --- INVERTED STEERING (Requested) ---
+            if (keys['a']) steer = 1; 
+            if (keys['d']) steer = -1; 
+            
             if (keys['f']) shoot = true;
             if (gamepadAssignments.p2 !== null && gamepads[gamepadAssignments.p2]) {
                 const gp = gamepads[gamepadAssignments.p2];
-                if (Math.abs(gp.axes[0]) > 0.2) steer = gp.axes[0];
+                if (Math.abs(gp.axes[0]) > 0.2) steer = -gp.axes[0]; // Inverted Axis
                 if (gp.buttons[0]?.pressed) throttle = 1;
                 if (gp.buttons[1]?.pressed) shoot = true;
             }
@@ -900,7 +964,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (gameParams.cameraRotate) {
                  const angle = player1.body.getAngle(); 
                  finalCamX = targetX + (-Math.sin(angle) * distH);
-                 finalCamZ = player1.mesh.position.z + (-Math.cos(angle) * distH);
+                 finalCamZ = player1.mesh.position.z + (Math.cos(angle) * distH);
                  if(gameParams.topDownMode) camera.up.set(Math.sin(angle), 0, Math.cos(angle));
                  else camera.up.set(0,1,0);
             } else {
