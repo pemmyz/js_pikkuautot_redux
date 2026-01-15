@@ -123,6 +123,19 @@
             <!-- Gameplay Settings -->
             <div class="setting-group">
                 <h3>Gameplay</h3>
+                
+                <!-- AI SELECTOR -->
+                <div class="setting-row">
+                    <label>AI Personality:</label>
+                    <select id="aiModeSelect" style="background:#333; color:#fff; border:1px solid #666; padding: 2px;">
+                        <option value="cruiser">Cruiser (Normal)</option>
+                        <option value="aggressive">Aggressive (Mad Max)</option>
+                        <option value="cautious">Cautious (Grandma)</option>
+                        <option value="erratic">Erratic (Drunk)</option>
+                        <option value="racer">Racer (Speed)</option>
+                    </select>
+                </div>
+
                 <div class="setting-row">
                     <label>Car Speed:</label>
                     <input type="range" id="playerSpeedSlider" min="10" max="150" step="5" value="100">

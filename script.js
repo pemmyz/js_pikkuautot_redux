@@ -44,9 +44,12 @@ document.addEventListener('DOMContentLoaded', () => {
         topDownMode: false,
         cameraRotate: false,
         
+        // --- AI Behavior ---
+        aiMode: 'cruiser', // Default AI Personality
+
         // --- GTA1 Arcade Physics Params ---
         gtaGrip: 0.12,          // Lower = more ice/drift. 0.12 is snappy but allows slide.
-        gtaTurnFactor: 8.5,     // Steering strength (UPDATED to 8.5)
+        gtaTurnFactor: 8.5,     // Steering strength
         gtaDrag: 0.985,         // Rolling resistance
         gtaHandbrakeGrip: 0.35  // Grip multiplier when handbraking
     };
@@ -67,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     
-    if (document.getElementById('lowResToggle').checked) {
+    if (document.getElementById('lowResToggle') && document.getElementById('lowResToggle').checked) {
         renderer.setPixelRatio(0.5);
     } else {
         renderer.setPixelRatio(window.devicePixelRatio);
@@ -305,14 +308,11 @@ document.addEventListener('DOMContentLoaded', () => {
             this.speed *= gameParams.gtaDrag;
 
             // --- FORWARD VECTOR ---
-            // In Planck/Box2D: Angle 0 is usually East (+X). However, in this setup Y seems to be forward.
-            // Using standard math: X = -sin(angle), Y = cos(angle) corresponds to North=0.
             const angle = this.body.getAngle();
             const fx = -Math.sin(angle); 
             const fy = Math.cos(angle);
 
             // --- TARGET VELOCITY ---
-            // Where the car *wants* to go based on wheel direction
             const targetVx = fx * this.speed;
             const targetVy = fy * this.speed;
 
@@ -320,8 +320,6 @@ document.addEventListener('DOMContentLoaded', () => {
             let grip = gameParams.gtaGrip;
             if (this.handbrake) grip *= gameParams.gtaHandbrakeGrip;
 
-            // Blend current velocity towards target velocity
-            // This creates the "slide" effect. Lower grip = slower convergence = more drift.
             this.vx += (targetVx - this.vx) * grip;
             this.vy += (targetVy - this.vy) * grip;
 
@@ -329,7 +327,6 @@ document.addEventListener('DOMContentLoaded', () => {
             this.body.setLinearVelocity(pl.Vec2(this.vx, this.vy));
 
             // --- KILL ANGULAR DRIFT ---
-            // Stop spinning if not steering
             this.body.setAngularVelocity(
                 this.body.getAngularVelocity() * 0.85
             );
@@ -339,98 +336,157 @@ document.addEventListener('DOMContentLoaded', () => {
             this.speed = clamp(this.speed, -max * 0.5, max);
         }
 
+        // --- UPDATED AI UPDATE METHOD WITH SWAPPABLE ALGORITHMS ---
         aiUpdate(dt) {
             if (this.isPlayer) return;
 
             const pos = this.body.getPosition();
-            
-            // NOTE: Use actual linear velocity magnitude for logic checks, not this.speed
-            // because this.speed is the "engine" speed, not physical speed (crashes etc)
             const physVel = this.body.getLinearVelocity().length();
-            
             const tileX = Math.round(pos.x / BLOCK_SIZE) * BLOCK_SIZE;
             const tileZ = Math.round(pos.y / BLOCK_SIZE) * BLOCK_SIZE;
             const tileKey = `${tileX},${tileZ}`;
             const distToCenter = pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ));
-
-            // --- CRASH RECOVERY LOGIC ---
+            
+            // --- 1. CRASH RECOVERY (Common to all) ---
             if(physVel < 2.0) {
                 this.stuckTimer += dt;
-                
-                const curAngle = this.body.getAngle();
-                let normAngle = curAngle;
-                while (normAngle <= -Math.PI) normAngle += 2*Math.PI;
-                while (normAngle > Math.PI) normAngle -= 2*Math.PI;
-                
-                if (Math.abs(normAngle) < Math.PI/2) {
-                    this.aiTargetAngle = 0;
-                } else {
-                    this.aiTargetAngle = Math.PI;
-                }
-                
-                // Shove
-                this.speed = 20; // Kickstart engine speed
-
-                // Force rotation if stuck too long
                 if(this.stuckTimer > 0.5) {
-                    let diff = angleDiff(this.aiTargetAngle, curAngle);
-                    this.body.setAngularVelocity(diff * 2.0);
+                    this.speed = 20; 
+                    const curAngle = this.body.getAngle();
+                    // Force turn if stuck
+                    this.body.setAngularVelocity(2.0);
+                    // Force reverse if really stuck
+                    if(this.stuckTimer > 2.0) this.speed = -10;
                 }
-
             } else {
                 this.stuckTimer = 0;
             }
-            
-            if (this.stuckTimer > 4.0 && currentMapType === 'default') {
-                this.markedForDeletion = true;
-            }
+            if (this.stuckTimer > 4.0 && currentMapType === 'default') this.markedForDeletion = true;
 
-            // --- NAVIGATION ---
+            // --- 2. NAVIGATION DECISIONS ---
             if (currentMapType !== 'default' && distToCenter < 8.0 && this.lastDecisionTile !== tileKey) {
                 this.lastDecisionTile = tileKey;
                 this.makeTurnDecision(tileX, tileZ);
             }
 
-            // --- AI DRIVING (GTA STYLE) ---
-            const currentAngle = this.body.getAngle();
-            let angleDiffVal = angleDiff(this.aiTargetAngle, currentAngle);
+            // --- 3. ALGORITHM SELECTION ---
+            let targetSpeed = this.maxSpeed / 3.6;
+            let steerFactor = 1.0;
+            let laneBias = 0; // Offset from center of lane
+            let laneChangeSpeed = 1.0;
 
-            // AI Steering
-            if (Math.abs(angleDiffVal) > 0.1) {
-                // Steer towards target
-                const turnRate = 3.0 * dt; // Turn speed
-                const turnAmt = clamp(angleDiffVal, -turnRate, turnRate);
+            const mode = gameParams.aiMode;
+
+            // --- ALGORITHM 1: CRUISER (Default) ---
+            if (mode === 'cruiser') {
+                // Standard behavior: steady speed, stays in center of lane
+                targetSpeed *= 1.0; 
+            }
+
+            // --- ALGORITHM 2: AGGRESSIVE (Mad Max) ---
+            else if (mode === 'aggressive') {
+                targetSpeed *= 1.4; // Faster
+                steerFactor = 2.0;  // Jerky steering
+                
+                // If player is ahead, try to ram or match X
+                if (player1) {
+                    const pPos = player1.body.getPosition();
+                    const dist = pPos.y - pos.y; // Assuming driving North/South
+                    // If player is within 60 units ahead
+                    if (Math.abs(dist) < 60) {
+                        // Steer towards player X
+                        const diffX = pPos.x - pos.x;
+                        laneBias = diffX; // Try to occupy player's lane
+                        laneChangeSpeed = 5.0; // Aggressive lane change
+                    }
+                }
+            }
+
+            // --- ALGORITHM 3: CAUTIOUS (Grandma) ---
+            else if (mode === 'cautious') {
+                targetSpeed *= 0.6; // Slow
+                steerFactor = 0.5;  // Gentle turns
+                
+                // Avoid player at all costs
+                if (player1) {
+                    const pPos = player1.body.getPosition();
+                    if (pl.Vec2.distance(pos, pPos) < 40) {
+                        targetSpeed *= 0.5; // Brake hard if player near
+                        // Stick to outer edge (simple avoidance)
+                        laneBias = (pos.x > 0) ? 5 : -5; 
+                    }
+                }
+            }
+
+            // --- ALGORITHM 4: ERRATIC (Drunk) ---
+            else if (mode === 'erratic') {
+                // Speed waves
+                const time = Date.now() / 1000;
+                targetSpeed *= (0.8 + Math.sin(time * 2) * 0.4); 
+                
+                // Weave back and forth
+                laneBias = Math.sin(time * 3) * 3.0; 
+                
+                // Random twitching
+                if (Math.random() < 0.02) {
+                    this.body.setAngularVelocity((Math.random() - 0.5) * 5);
+                }
+            }
+
+            // --- ALGORITHM 5: RACER (Speed) ---
+            else if (mode === 'racer') {
+                targetSpeed *= 1.8; // Very fast
+                laneChangeSpeed = 3.0;
+                
+                // Corner cutting logic (simple version)
+                // If turning left, enter form right, exit right (Apexing)
+                const angleDiffVal = angleDiff(this.aiTargetAngle, this.body.getAngle());
+                if (Math.abs(angleDiffVal) > 0.5) {
+                    // Slow less for corners
+                     targetSpeed *= 0.8; 
+                } else {
+                    // Overtake logic: If blocked by another car, switch lane
+                    // (Simplified: just weave constantly to find gaps)
+                    const time = Date.now() / 500;
+                    laneBias = Math.sin(time) * 2.0; 
+                }
+            }
+
+            // --- 4. PHYSICS APPLICATION ---
+            const currentAngle = this.body.getAngle();
+            const angleToTarget = angleDiff(this.aiTargetAngle, currentAngle);
+
+            // Steering
+            if (Math.abs(angleToTarget) > 0.1) {
+                const turnRate = 3.0 * steerFactor * dt;
+                const turnAmt = clamp(angleToTarget, -turnRate, turnRate);
                 this.body.setAngle(currentAngle + turnAmt);
-                
-                // Slow down for turns
-                this.speed = (this.maxSpeed / 3.6) * 0.6; 
+                this.speed = targetSpeed * 0.6; // Slow down in turns
             } else {
-                // Straighten out
-                this.body.setAngle(currentAngle + angleDiffVal * 0.1);
+                // Straightening & Lane Correction
+                this.body.setAngle(currentAngle + angleToTarget * 0.1);
                 
-                // LANE CORRECTION SYSTEM
-                if (physVel > 5.0 && distToCenter > 4.0) {
+                // Lane Logic (Only applies on Highway/Default map mostly)
+                if (physVel > 5.0 && distToCenter > 4.0 && currentMapType === 'default') {
                     let idealX = tileX;
                     const cosA = Math.cos(this.aiTargetAngle);
+                    
+                    // Determine base lane
+                    if (Math.abs(cosA) > 0.5) { // Vertical driving
+                         if (pos.x > 0) idealX = 4.5 + (pos.x > 4.5 ? 2 : -2); 
+                         else idealX = -4.5 + (pos.x < -4.5 ? -2 : 2);
+                    }
+                    
+                    // Apply Algorithm Bias
+                    idealX += laneBias;
 
-                    if (currentMapType === 'default') {
-                        if (Math.abs(cosA) > 0.5 && cosA > 0) {
-                           idealX = (pos.x > 4) ? 6.5 : 2.5;
-                        } 
-                        else if (Math.abs(cosA) > 0.5 && cosA < 0) {
-                           idealX = (pos.x < -4) ? -6.5 : -2.5;
-                        }
-                        
-                        const diffX = idealX - pos.x;
-                        if (Math.abs(diffX) > 0.2) {
-                            // Slide laterally artificially for lane change
-                            this.vx += diffX * dt; 
-                        }
-                    } 
+                    // Apply Correction
+                    const diffX = idealX - pos.x;
+                    if (Math.abs(diffX) > 0.2) {
+                        this.vx += diffX * laneChangeSpeed * dt; 
+                    }
                 }
-
-                // Full Throttle
-                this.speed = this.maxSpeed / 3.6;
+                this.speed = targetSpeed;
             }
         }
 
@@ -476,25 +532,18 @@ document.addEventListener('DOMContentLoaded', () => {
             this.handbrake = keys[' '] || keys['shift'];
 
             // --- ACCELERATION ---
-            // Simple scalar addition
             const accel = this.power * 0.002;
             if (throttle !== 0) {
                 this.speed += throttle * accel;
             }
 
             // --- TURNING (Speed Dependent) ---
-            // Only turn if moving faster than a crawl
             if (Math.abs(this.speed) > 0.1) {
                 const maxVelUnit = this.maxSpeed / 3.6;
                 const ratio = Math.abs(this.speed) / maxVelUnit;
                 
-                // turn = steer * factor * speedRatio * dt
-                // Applying dt factor (0.016) implicitly here by tweaking the constant or just relying on frame rate.
-                // Using gameParams.gtaTurnFactor * dt-like scalar
                 const turn = steer * gameParams.gtaTurnFactor * ratio * 0.02;
 
-                // Adjust Angle
-                // If reversing, invert steering for intuitive controls
                 const dir = this.speed > 0 ? 1 : -1;
                 
                 this.body.setAngle(
@@ -1082,6 +1131,15 @@ document.addEventListener('DOMContentLoaded', () => {
         div.className = 'setting-row';
         div.innerHTML = '<label>Traffic Radius:</label><input type="range" id="radiusSlider" min="50" max="300" step="10" value="120"><span class="slider-value" id="radiusValue">120</span>';
         gameplayGroup.appendChild(div);
+    }
+    
+    // --- AI Selector Logic ---
+    const aiSelect = document.getElementById('aiModeSelect');
+    if (aiSelect) {
+        aiSelect.addEventListener('change', (e) => {
+            gameParams.aiMode = e.target.value;
+            console.log("AI Mode switched to:", gameParams.aiMode);
+        });
     }
 
     function toggleMenu(menu) {
