@@ -94,19 +94,24 @@ If textures are missing, procedural placeholder cars are generated automatically
 
 ---
 
+
 ## 🚀 Running the Game
 
-Just open `index.html` in a modern browser:
-
 ```bash
-firefox index.html
-# or
-chrome index.html
+# Clone or download your repo, then simply open index.html
+# (No Node, bundlers, or servers required.)
 ```
 
-No local server is required.
+If you prefer a local server (for strict browser policies):
+
+```bash
+# Python 3
+python -m http.server 8000
+# then open http://localhost:8000
+```
 
 ---
+
 
 ## 🧪 Performance Tips
 
