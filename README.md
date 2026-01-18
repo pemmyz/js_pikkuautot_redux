@@ -143,7 +143,7 @@ MIT License – free to use, modify, and redistribute.
 
 ## 👤 Author
 
-Created by **Pekka**  
+Created by **pemmyz**  
 Built as an experimental retro-modern browser arcade project.
 
 Enjoy the chaos 🚓💥
