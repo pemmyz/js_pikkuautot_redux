@@ -9,6 +9,12 @@ This project is fully browser-based, requires no build step, and runs entirely o
 
 ---
 
+## Screenshots
+
+### Game
+![Game 1](screenshots/game_1.png)
+
+
 ## 🎮 Features
 
 - 🚗 **GTA 1–inspired arcade driving physics**
