@@ -41,7 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
         bulletGlow: false,
         cameraHeight: 60,
         cameraFOV: 50,
-        topDownMode: false,
+        topDownMode: true,
         cameraRotate: false,
         
         // --- AI Behavior ---
