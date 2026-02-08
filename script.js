@@ -41,7 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
         bulletGlow: false,
         cameraHeight: 60,
         cameraFOV: 50,
-        topDownMode: true,
+        topDownMode: true, // CHANGED: Default to True
         cameraRotate: false,
         
         // --- AI Behavior ---
@@ -144,6 +144,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     if(Math.random() > 0.3) ctx.fillRect(x, y, 12, 18);
                 }
             }
+        } else if (type === 'roof') {
+            // New Roof Texture: Plain concrete/dark grey
+            ctx.fillStyle = '#555555'; 
+            ctx.fillRect(0, 0, 128, 128);
+            // Add a slight border/noise
+            ctx.strokeStyle = '#444444';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(0,0,128,128);
+            ctx.fillStyle = '#666666';
+            ctx.fillRect(20, 20, 20, 20); // HVAC unit or similar detail
         }
 
         const tex = new THREE.CanvasTexture(canvas);
@@ -221,6 +231,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (this.mesh) {
                 scene.remove(this.mesh);
                 if(this.mesh.geometry) this.mesh.geometry.dispose();
+                // Dispose materials if array
+                if (Array.isArray(this.mesh.material)) {
+                    this.mesh.material.forEach(m => m.dispose());
+                } else if(this.mesh.material) {
+                    this.mesh.material.dispose();
+                }
             }
             if (this.body) world.destroyBody(this.body);
         }
@@ -664,12 +680,24 @@ document.addEventListener('DOMContentLoaded', () => {
         const addBuilding = (x, z) => {
             const h = Math.random() * 15 + 5;
             const w = Math.random() * 8 + 6;
+            
+            // Textures
             const buildTex = createProceduralTexture('building');
             buildTex.repeat.set(w/10, h/10);
             
-            const bMat = gameParams.simpleMaterials ? new THREE.MeshLambertMaterial({ map: buildTex }) : new THREE.MeshStandardMaterial({ map: buildTex, roughness: 0.2 });
-            const bMesh = new THREE.Mesh(boxGeo, bMat);
+            const roofTex = createProceduralTexture('roof');
+            roofTex.repeat.set(w/10, w/10);
+            
+            const MatClass = gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial;
+            
+            // Materials for sides and roof
+            const sideMat = new MatClass({ map: buildTex, roughness: 0.2 });
+            const roofMat = new MatClass({ map: roofTex, roughness: 0.5 });
+            
+            // Array: [Right, Left, Top, Bottom, Front, Back]
+            const materials = [sideMat, sideMat, roofMat, roofMat, sideMat, sideMat];
 
+            const bMesh = new THREE.Mesh(boxGeo, materials);
             bMesh.position.set(x, h/2, z);
             bMesh.scale.set(w, h, w);
             bMesh.castShadow = true; bMesh.receiveShadow = true;
@@ -732,7 +760,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const chunkIdx = Math.round(chunk.zStart / CHUNK_LENGTH);
             
             if (Math.abs(chunkIdx - currentChunkIdx) > 2) {
-                chunk.meshes.forEach(m => { scene.remove(m); if(m.geometry) m.geometry.dispose(); });
+                chunk.meshes.forEach(m => { 
+                    scene.remove(m); 
+                    if(m.geometry) m.geometry.dispose();
+                    if(Array.isArray(m.material)) m.material.forEach(mat=>mat.dispose());
+                    else if(m.material) m.material.dispose();
+                });
                 chunk.bodies.forEach(b => world.destroyBody(b));
                 chunk.roadData.forEach(t => delete roadLookup[`${t.x},${t.z}`]);
                 roadTiles = roadTiles.filter(t => !chunk.roadData.includes(t));
@@ -1083,10 +1116,23 @@ document.addEventListener('DOMContentLoaded', () => {
                     for (let x = 0; x < w; x++) {
                         if (mapGrid[z][x] === '#') {
                             const height = Math.random() * 25 + 5;
+                            
+                            // Textures
                             const buildTex = createProceduralTexture('building');
                             buildTex.repeat.set(BLOCK_SIZE/10, height/10);
-                            const bMat = gameParams.simpleMaterials ? new THREE.MeshLambertMaterial({map: buildTex}) : new THREE.MeshStandardMaterial({map: buildTex});
-                            const mesh = new THREE.Mesh(boxGeo, bMat);
+                            
+                            const roofTex = createProceduralTexture('roof');
+                            // No specific repeat needed for basic roof
+                            
+                            // Materials
+                            const MatClass = gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial;
+                            const sideMat = new MatClass({map: buildTex});
+                            const roofMat = new MatClass({map: roofTex});
+                            
+                            // Array: [Right, Left, Top, Bottom, Front, Back]
+                            const materials = [sideMat, sideMat, roofMat, roofMat, sideMat, sideMat];
+
+                            const mesh = new THREE.Mesh(boxGeo, materials);
                             mesh.scale.set(BLOCK_SIZE, height, BLOCK_SIZE);
                             const wx = (x * BLOCK_SIZE) - wallOffX;
                             const wz = (z * BLOCK_SIZE) - wallOffZ;
