@@ -553,12 +553,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.speed += throttle * accel;
             }
 
-            // --- TURNING (Speed Dependent) ---
+            // --- TURNING (Updated for stability) ---
             if (Math.abs(this.speed) > 0.1) {
-                const maxVelUnit = this.maxSpeed / 3.6;
-                const ratio = Math.abs(this.speed) / maxVelUnit;
+                const speedAbs = Math.abs(this.speed);
                 
-                const turn = steer * gameParams.gtaTurnFactor * ratio * 0.02;
+                // 1. Steering Authority: Ramp up quickly at low speed (0-15)
+                // This ensures steering feels responsive ("stays the same") as you start moving.
+                const authority = Math.min(1.0, speedAbs / 15.0);
+                
+                // 2. High Speed Damping: Reduce steering sensitivity as you approach max speed.
+                // This makes the car "turn slower the faster it goes" to prevent rickety/twitchy handling.
+                const maxVelUnit = this.maxSpeed / 3.6;
+                const speedFraction = Math.min(1.0, speedAbs / maxVelUnit);
+                // Damping factor: 1.0 at low speed, drops to 0.5 at max speed.
+                const dampening = 1.0 - (speedFraction * 0.5); 
+                
+                // Calculate turn amount
+                // Note: removed linear `ratio` scaling. Using a fixed base multiplier (0.006)
+                // coupled with authority and dampening gives consistent control.
+                const turn = steer * gameParams.gtaTurnFactor * authority * dampening * 0.006;
 
                 const dir = this.speed > 0 ? 1 : -1;
                 
