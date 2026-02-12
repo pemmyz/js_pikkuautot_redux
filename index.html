@@ -35,7 +35,7 @@
                 </div>
             </div>
             
-            <p class="small-text">Controls: Arrows/WASD to Drive, Space/F to Shoot</p>
+            <p class="small-text">Controls: Arrows/WASD to Drive, Space/Shift to Drift</p>
         </div>
 
         <!-- HEADER -->
@@ -50,11 +50,38 @@
         <!-- 3D CANVAS -->
         <div id="canvas-container"></div>
 
+        <!-- BOTTOM LEFT OPTIONS HINT -->
+        <div id="optionsHint" class="bottom-left-hint hidden">
+            Press <b>O</b> for Options
+        </div>
+
+        <!-- OPTIONS MENU (New) -->
+        <div id="optionsMenu" class="menu-overlay hidden">
+            <h2>Game Options</h2>
+            <div class="setting-group">
+                <h3>Physics Engine</h3>
+                <div class="setting-row">
+                    <label>Mode:</label>
+                    <div class="toggle-group">
+                        <button id="physOldBtn" class="toggle-btn">Old (Arcade)</button>
+                        <button id="physNewBtn" class="toggle-btn active">New (Drift)</button>
+                    </div>
+                </div>
+                <p class="info-text" id="physInfoText">
+                    New: Drifting, tire marks, spin-outs.<br>Spacebar to Handbrake.
+                </p>
+            </div>
+            <div class="button-group">
+                <button class="close-options">Resume</button>
+            </div>
+        </div>
+
         <!-- HELP MENU -->
         <div id="helpMenu" class="menu-overlay hidden">
             <h2>Controls</h2>
-            <p><b>P1:</b> Arrows (Move), Space (Shoot)</p>
+            <p><b>P1:</b> Arrows (Move), R-Ctrl (Shoot)</p>
             <p><b>P2:</b> WASD (Move), F (Shoot)</p>
+            <p><b>Drift/Brake:</b> Space or Shift</p>
             <hr>
             <p><b>Gamepad:</b> Press A/B/X/Y to Join!</p>
             <p><b>Goal:</b> Drive North. Avoid Traffic.</p>
@@ -100,15 +127,10 @@
             <!-- Camera Settings -->
             <div class="setting-group">
                 <h3>Camera</h3>
-
-
-
                 <div class="setting-row">
                     <label>Top Down View:</label>
                     <input type="checkbox" id="topDownToggle" checked>
                 </div>
-
-
                 <div class="setting-row">
                     <label>Rotate w/ Car:</label>
                     <input type="checkbox" id="camRotateToggle">
@@ -129,7 +151,6 @@
             <div class="setting-group">
                 <h3>Gameplay</h3>
                 
-                <!-- AI SELECTOR -->
                 <div class="setting-row">
                     <label>AI Personality:</label>
                     <select id="aiModeSelect" style="background:#333; color:#fff; border:1px solid #666; padding: 2px;">

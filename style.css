@@ -23,7 +23,7 @@ body {
 canvas { display: block; }
 
 /* Header & HUD */
-#gameHeader.hidden, #hud.hidden { display: none; }
+#gameHeader.hidden, #hud.hidden, #optionsHint.hidden { display: none; }
 
 #gameHeader {
     position: absolute;
@@ -62,8 +62,10 @@ button {
     cursor: pointer;
     font-weight: bold;
     border-radius: 4px;
+    transition: background 0.2s;
 }
 button:hover { background: #555; }
+button:active { background: #777; }
 
 .button-group {
     display: flex;
@@ -106,7 +108,27 @@ button:hover { background: #555; }
 .section { margin-bottom: 15px; border-bottom: 1px solid #444; }
 .section p { color: #aaa; margin: 5px 0; font-weight: bold;}
 
+.info-text { font-size: 0.8em; color: #aaa; margin-top: 5px; font-style: italic;}
+
 input[type="checkbox"] { transform: scale(1.3); cursor: pointer; }
+
+/* Toggle Buttons for Physics */
+.toggle-group {
+    display: flex;
+    gap: 0;
+}
+.toggle-btn {
+    border-radius: 0;
+    padding: 5px 10px;
+    font-size: 0.9em;
+}
+.toggle-btn:first-child { border-radius: 4px 0 0 4px; }
+.toggle-btn:last-child { border-radius: 0 4px 4px 0; }
+.toggle-btn.active {
+    background-color: #ffcc00;
+    color: #000;
+    border-color: #ffcc00;
+}
 
 /* HUD */
 #hud {
@@ -120,3 +142,16 @@ input[type="checkbox"] { transform: scale(1.3); cursor: pointer; }
 }
 #p1Score { color: #ff6666; }
 #p2Score { color: #6666ff; }
+
+/* Bottom Left Hint */
+.bottom-left-hint {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    font-size: 0.9em;
+    color: rgba(255,255,255,0.5);
+    z-index: 10;
+    pointer-events: none;
+    font-family: monospace;
+}
+.clickable { cursor: pointer; color: #aaa; text-decoration: underline; }

@@ -21,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let gameActive = false;
     let loadedTextures = [];
     let currentMapType = 'default';
+    let physicsMode = 'new'; // 'old' or 'new'
     
     // --- Infinite Highway State ---
     let highwayChunks = [];
@@ -29,10 +30,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let gamepadAssignments = { p1: null, p2: null }; 
 
     let gameParams = {
-        playerSpeed: 300, // Player Speed (3x)
+        playerSpeed: 300, // Player Speed Scalar
         enemySpeed: 60,   // AI Normal Speed
-        turnSpeed: 2.5,  
-        drift: 0.85,
         trafficCount: 20, 
         spawnRadius: 120,
         simpleMaterials: false, 
@@ -41,17 +40,17 @@ document.addEventListener('DOMContentLoaded', () => {
         bulletGlow: false,
         cameraHeight: 60,
         cameraFOV: 50,
-        topDownMode: true, // CHANGED: Default to True
+        topDownMode: true, 
         cameraRotate: false,
         
         // --- AI Behavior ---
-        aiMode: 'cruiser', // Default AI Personality
+        aiMode: 'cruiser', 
 
-        // --- GTA1 Arcade Physics Params ---
-        gtaGrip: 0.12,          // Lower = more ice/drift. 0.12 is snappy but allows slide.
-        gtaTurnFactor: 8.5,     // Steering strength
-        gtaDrag: 0.985,         // Rolling resistance
-        gtaHandbrakeGrip: 0.35  // Grip multiplier when handbraking
+        // --- OLD ARCADE Physics Params ---
+        gtaGrip: 0.12,          
+        gtaTurnFactor: 8.5,     
+        gtaDrag: 0.985,         
+        gtaHandbrakeGrip: 0.35 
     };
     
     let p1Score = 0;
@@ -62,6 +61,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const p2ScoreEl = document.getElementById('p2Score');
     const helpMenu = document.getElementById('helpMenu');
     const customizeMenu = document.getElementById('customizeMenu');
+    const optionsMenu = document.getElementById('optionsMenu');
+    const optionsHint = document.getElementById('optionsHint');
 
     // --- THREE.JS Setup ---
     const container = document.getElementById('canvas-container');
@@ -111,6 +112,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let mapGrid = [];
     let roadTiles = []; 
     let roadLookup = {}; 
+    let skidMarks = []; // Array to manage tire marks
+    let skidTexture = null;
     
     const CAT_PLAYER = 0x0001;
     const CAT_ENEMY = 0x0002;
@@ -145,28 +148,33 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         } else if (type === 'roof') {
-            // New Roof Texture: Plain concrete/dark grey
             ctx.fillStyle = '#555555'; 
             ctx.fillRect(0, 0, 128, 128);
-            // Add a slight border/noise
             ctx.strokeStyle = '#444444';
             ctx.lineWidth = 4;
             ctx.strokeRect(0,0,128,128);
             ctx.fillStyle = '#666666';
-            ctx.fillRect(20, 20, 20, 20); // HVAC unit or similar detail
+            ctx.fillRect(20, 20, 20, 20); 
+        } else if (type === 'skid') {
+            // Semi-transparent black tire mark
+            ctx.clearRect(0,0,128,128);
+            ctx.fillStyle = 'rgba(10, 10, 10, 0.6)';
+            ctx.fillRect(0,0,128,128);
         }
 
         const tex = new THREE.CanvasTexture(canvas);
         tex.wrapS = THREE.RepeatWrapping;
         tex.wrapT = THREE.RepeatWrapping;
         tex.magFilter = THREE.NearestFilter;
-        tex.minFilter = THREE.NearestFilter;
+        tex.minFilter = THREE.LinearFilter;
         tex.colorSpace = THREE.SRGBColorSpace;
         return tex;
     }
 
     function loadAssets() {
         if(loadedTextures.length > 0) return Promise.resolve();
+        skidTexture = createProceduralTexture('skid');
+
         const promises = [];
         for (let i = 1; i <= MAX_ASSETS; i++) {
             const num = i.toString().padStart(3, '0');
@@ -194,14 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return Promise.all(promises);
     }
 
-    function getLateralVelocity(body) {
-        const currentRightNormal = body.getWorldVector(pl.Vec2(1, 0));
-        const velocity = body.getLinearVelocity();
-        const lateralMag = pl.Vec2.dot(currentRightNormal, velocity);
-        return currentRightNormal.mul(lateralMag);
-    }
-
-    // --- Helpers ---
+    // --- Helper Math ---
     function clamp(v, min, max) {
         return Math.max(min, Math.min(max, v));
     }
@@ -231,7 +232,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (this.mesh) {
                 scene.remove(this.mesh);
                 if(this.mesh.geometry) this.mesh.geometry.dispose();
-                // Dispose materials if array
                 if (Array.isArray(this.mesh.material)) {
                     this.mesh.material.forEach(m => m.dispose());
                 } else if(this.mesh.material) {
@@ -239,6 +239,39 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
             if (this.body) world.destroyBody(this.body);
+        }
+    }
+
+    // --- Skid Mark System ---
+    class SkidMark {
+        constructor(x, y, angle) {
+            const geo = new THREE.PlaneGeometry(0.8, 0.8);
+            const mat = new THREE.MeshBasicMaterial({ 
+                map: skidTexture, 
+                transparent: true, 
+                opacity: 0.5, 
+                depthWrite: false,
+                polygonOffset: true,
+                polygonOffsetFactor: -1 // Draw just above road
+            });
+            this.mesh = new THREE.Mesh(geo, mat);
+            this.mesh.position.set(x, 0.05, y); // Slightly above ground
+            this.mesh.rotation.x = -Math.PI / 2;
+            this.mesh.rotation.z = angle;
+            scene.add(this.mesh);
+            this.life = 4.0; // Seconds before fade
+        }
+        update(dt) {
+            this.life -= dt;
+            if (this.life < 1.0) {
+                this.mesh.material.opacity = this.life * 0.5;
+            }
+            return this.life > 0;
+        }
+        destroy() {
+            scene.remove(this.mesh);
+            this.mesh.geometry.dispose();
+            this.mesh.material.dispose();
         }
     }
 
@@ -277,11 +310,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const body = world.createBody({
                 type: 'dynamic',
                 position: pl.Vec2(x, y),
-                linearDamping: 0.0, // Managed manually now
+                linearDamping: 0.0, 
                 angularDamping: 2.0 
             });
 
-            // Prevent cars from sleeping if they stop moving
             body.setSleepingAllowed(false);
 
             body.createFixture(pl.Box(width / 2, height / 2), {
@@ -297,213 +329,266 @@ document.addEventListener('DOMContentLoaded', () => {
             this.playerIndex = playerIndex;
             this.shootCooldown = 0;
             this.maxSpeed = isPlayer ? gameParams.playerSpeed : gameParams.enemySpeed;
-            this.power = isPlayer ? 300 : 150; // Player: 3x Acceleration. Enemy: Normal.
+            this.power = isPlayer ? 300 : 150; 
             
             this.aiTargetAngle = 0;
             this.lastDecisionTile = null;
             this.plannedAction = plannedAction; 
             this.laneOffset = laneOffset; 
-            this.aiCounter = 0; 
             this.stuckTimer = 0; 
-            this.resetTimer = 0; 
 
-            // --- GTA1 Physics State ---
+            // --- Control Inputs ---
+            this.throttleInput = 0;
+            this.steerInput = 0;
+            this.handbrakeInput = false;
+
+            // --- GTA1 Arcade State ---
             this.speed = 0;
             this.vx = 0;
             this.vy = 0;
-            this.handbrake = false;
         }
 
         update(dt) {
             super.update();
             if (this.shootCooldown > 0) this.shootCooldown -= dt;
-            
             this.maxSpeed = this.isPlayer ? gameParams.playerSpeed : gameParams.enemySpeed;
-            
-            // --- GTA1 DRAG ---
+
+            if (physicsMode === 'old') {
+                this.updatePhysicsOld(dt);
+            } else {
+                this.updatePhysicsNew(dt);
+            }
+        }
+
+        drive(throttle, steer, handbrake) {
+            this.throttleInput = throttle;
+            this.steerInput = steer;
+            this.handbrakeInput = handbrake;
+        }
+
+        // --- OLD: Direct Velocity Manipulation ---
+        updatePhysicsOld(dt) {
+            // Drag
             this.speed *= gameParams.gtaDrag;
 
-            // --- FORWARD VECTOR ---
+            // Acceleration
+            const accel = this.power * 0.002;
+            if (this.throttleInput !== 0) {
+                // If handbrake is held, severely reduce acceleration power (engine revving but slipping)
+                const slip = this.handbrakeInput ? 0.3 : 1.0;
+                this.speed += this.throttleInput * accel * slip;
+            }
+
+            // Steering Logic
+            if (Math.abs(this.speed) > 0.1) {
+                const speedAbs = Math.abs(this.speed);
+                const authority = Math.min(1.0, speedAbs / 15.0);
+                const maxVelUnit = this.maxSpeed / 3.6;
+                const speedFraction = Math.min(1.0, speedAbs / maxVelUnit);
+                const dampening = 1.0 - (speedFraction * 0.5); 
+                
+                // Allow faster spinning if handbrake is on (turn around)
+                const handbrakeBonus = this.handbrakeInput ? 2.5 : 1.0;
+
+                const turn = this.steerInput * gameParams.gtaTurnFactor * authority * dampening * 0.006 * handbrakeBonus;
+                const dir = this.speed > 0 ? 1 : -1;
+                
+                this.body.setAngle(this.body.getAngle() - (turn * dir));
+            }
+
+            // Calculate Forward Vector
             const angle = this.body.getAngle();
             const fx = -Math.sin(angle); 
             const fy = Math.cos(angle);
 
-            // --- TARGET VELOCITY ---
+            // Determine Target Velocity Vector
             const targetVx = fx * this.speed;
             const targetVy = fy * this.speed;
 
-            // --- GRIP / DRIFT ---
+            // Apply Grip / Drift
             let grip = gameParams.gtaGrip;
-            if (this.handbrake) grip *= gameParams.gtaHandbrakeGrip;
+            if (this.handbrakeInput) {
+                grip *= gameParams.gtaHandbrakeGrip; // Slide more
+                // If sliding fast, leave marks
+                if (Math.abs(this.speed) > 10) this.spawnSkidMarks();
+            }
 
             this.vx += (targetVx - this.vx) * grip;
             this.vy += (targetVy - this.vy) * grip;
 
-            // --- APPLY TO PLANCK ---
             this.body.setLinearVelocity(pl.Vec2(this.vx, this.vy));
+            this.body.setAngularVelocity(this.body.getAngularVelocity() * 0.85); // High angular damping in old mode
 
-            // --- KILL ANGULAR DRIFT ---
-            this.body.setAngularVelocity(
-                this.body.getAngularVelocity() * 0.85
-            );
-
-            // --- SPEED CAP ---
-            const max = this.maxSpeed / 3.6; // convert km/h roughly to units
+            // Speed Cap
+            const max = this.maxSpeed / 3.6; 
             this.speed = clamp(this.speed, -max * 0.5, max);
         }
 
-        // --- UPDATED AI UPDATE METHOD WITH SWAPPABLE ALGORITHMS ---
+        // --- NEW: Physics-Based Drift Model ---
+        updatePhysicsNew(dt) {
+            const body = this.body;
+            const velocity = body.getLinearVelocity();
+            const speed = velocity.length();
+
+            // 1. Get Orientation Vectors
+            const angle = body.getAngle();
+            // Forward is local -Y in ThreeJS, effectively 0,1 world with angle 0?
+            // In Planck here: Angle 0 = Up (0,1)? No, usually Right.
+            // Let's stick to the convention used in 'old': -sin(a), cos(a) is forward.
+            const forwardNormal = pl.Vec2(-Math.sin(angle), Math.cos(angle));
+            const rightNormal = pl.Vec2(Math.cos(angle), Math.sin(angle));
+
+            // 2. Kill Lateral Velocity (The "Tire Grip" impulse)
+            const lateralVel = pl.Vec2.dot(rightNormal, velocity);
+            const forwardVel = pl.Vec2.dot(forwardNormal, velocity);
+            
+            // Grip factor: 1.0 = tracks perfectly, 0.0 = ice.
+            let grip = 0.95; // High default grip
+            
+            // Reduce grip if handbraking
+            if (this.handbrakeInput) {
+                grip = 0.05; // Drifting/Sliding
+            } 
+            // Also reduce grip if turning extremely hard at high speed (loss of traction)
+            else if (speed > 20 && Math.abs(lateralVel) > 10) {
+                 grip = 0.90; 
+            }
+
+            const impulse = rightNormal.clone().mul(-lateralVel * grip * body.getMass());
+            body.applyLinearImpulse(impulse, body.getWorldCenter());
+
+            // 3. Angular Control (Steering)
+            // If handbraking, allow car to spin freely (low angular damping). 
+            // If driving straight, dampen rotation.
+            if (this.handbrakeInput) {
+                body.setAngularDamping(0.5); 
+            } else {
+                body.setAngularDamping(4.0);
+            }
+
+            // Apply steering torque / angular velocity
+            if (Math.abs(this.steerInput) > 0.01) {
+                // Steer stronger if handbraking to whip the car around
+                const steerPower = this.handbrakeInput ? 6.0 : 3.0; 
+                
+                // Inverse steering direction for reverse?
+                let dir = 1;
+                if (forwardVel < -5) dir = -1; // Reverse steering
+                
+                // Apply rotation logic. 
+                // We use angular impulse or set velocity for snappiness.
+                const currentAngVel = body.getAngularVelocity();
+                const targetAngVel = -this.steerInput * steerPower * dir;
+                
+                // Blend
+                const angDiff = targetAngVel - currentAngVel;
+                body.applyAngularImpulse(angDiff * body.getInertia() * 0.1); 
+            }
+
+            // 4. Engine Power (Forward Impulse)
+            if (Math.abs(this.throttleInput) > 0.01) {
+                let forceMagnitude = this.power * 0.5 * this.throttleInput;
+                // If handbrake is on, driving force is reduced (wheels spinning)
+                if (this.handbrakeInput) forceMagnitude *= 0.3;
+
+                const force = forwardNormal.clone().mul(forceMagnitude);
+                body.applyForce(force, body.getWorldCenter());
+            }
+
+            // 5. Linear Drag (Air resistance + Rolling resistance)
+            // Add extra drag if moving sideways (scrubbing speed)
+            const dragFactor = 0.02 + (Math.abs(lateralVel) * 0.05); 
+            // Extra drag on handbrake (brakes locked)
+            const brakeDrag = this.handbrakeInput ? 0.05 : 0;
+            
+            const dragForce = velocity.clone().mul(-(dragFactor + brakeDrag) * body.getMass());
+            body.applyForce(dragForce, body.getWorldCenter());
+
+            // 6. Skid Marks Logic
+            // If there is significant lateral velocity (sliding), or handbrake is locked
+            if ((Math.abs(lateralVel) > 4.0 && speed > 5) || (this.handbrakeInput && speed > 5)) {
+                this.spawnSkidMarks();
+            }
+
+            // Update internal speed prop for AI logic consistency
+            this.speed = forwardVel * 3.6; // approx conversion
+        }
+
+        spawnSkidMarks() {
+            // Don't spawn every frame, maybe every 3rd frame or based on distance
+            if (Math.random() > 0.4) return; 
+
+            const pos = this.body.getPosition();
+            const angle = this.body.getAngle();
+            const right = { x: Math.cos(angle), y: Math.sin(angle) };
+            const fwd = { x: -Math.sin(angle), y: Math.cos(angle) };
+
+            // Offset to rear tires. 
+            // Car is approx 3.8 long (center is 0). Back is ~ -1.5. 
+            // Width 1.8. Tires ~ +/- 0.6.
+            const backOffset = -1.4;
+            const widthOffset = 0.65;
+
+            const lX = pos.x + (fwd.x * backOffset) - (right.x * widthOffset);
+            const lY = pos.y + (fwd.y * backOffset) - (right.y * widthOffset);
+            
+            const rX = pos.x + (fwd.x * backOffset) + (right.x * widthOffset);
+            const rY = pos.y + (fwd.y * backOffset) + (right.y * widthOffset);
+
+            skidMarks.push(new SkidMark(lX, lY, angle));
+            skidMarks.push(new SkidMark(rX, rY, angle));
+        }
+
+        // --- UPDATED AI (Kept largely same, just inputs) ---
         aiUpdate(dt) {
             if (this.isPlayer) return;
 
             const pos = this.body.getPosition();
-            const physVel = this.body.getLinearVelocity().length();
+            const velocity = this.body.getLinearVelocity();
+            const physVel = velocity.length();
+            
             const tileX = Math.round(pos.x / BLOCK_SIZE) * BLOCK_SIZE;
             const tileZ = Math.round(pos.y / BLOCK_SIZE) * BLOCK_SIZE;
             const tileKey = `${tileX},${tileZ}`;
-            const distToCenter = pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ));
             
-            // --- 1. CRASH RECOVERY (Common to all) ---
+            // --- 1. CRASH RECOVERY ---
             if(physVel < 2.0) {
                 this.stuckTimer += dt;
                 if(this.stuckTimer > 0.5) {
-                    this.speed = 20; 
-                    const curAngle = this.body.getAngle();
-                    // Force turn if stuck
-                    this.body.setAngularVelocity(2.0);
-                    // Force reverse if really stuck
-                    if(this.stuckTimer > 2.0) this.speed = -10;
+                    this.drive(-1, 1, false); // Reverse & Turn
+                    return;
                 }
             } else {
                 this.stuckTimer = 0;
             }
             if (this.stuckTimer > 4.0 && currentMapType === 'default') this.markedForDeletion = true;
 
-            // --- 2. NAVIGATION DECISIONS ---
-            if (currentMapType !== 'default' && distToCenter < 8.0 && this.lastDecisionTile !== tileKey) {
+            // --- 2. NAVIGATION ---
+            if (currentMapType !== 'default' && pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ)) < 8.0 && this.lastDecisionTile !== tileKey) {
                 this.lastDecisionTile = tileKey;
                 this.makeTurnDecision(tileX, tileZ);
             }
 
-            // --- 3. ALGORITHM SELECTION ---
-            let targetSpeed = this.maxSpeed / 3.6;
-            let steerFactor = 1.0;
-            let laneBias = 0; // Offset from center of lane
-            let laneChangeSpeed = 1.0;
-
-            const mode = gameParams.aiMode;
-
-            // --- ALGORITHM 1: CRUISER (Default) ---
-            if (mode === 'cruiser') {
-                // Standard behavior: steady speed, stays in center of lane
-                targetSpeed *= 1.0; 
-            }
-
-            // --- ALGORITHM 2: AGGRESSIVE (Mad Max) ---
-            else if (mode === 'aggressive') {
-                targetSpeed *= 1.4; // Faster
-                steerFactor = 2.0;  // Jerky steering
-                
-                // If player is ahead, try to ram or match X
-                if (player1) {
-                    const pPos = player1.body.getPosition();
-                    const dist = pPos.y - pos.y; // Assuming driving North/South
-                    // If player is within 60 units ahead
-                    if (Math.abs(dist) < 60) {
-                        // Steer towards player X
-                        const diffX = pPos.x - pos.x;
-                        laneBias = diffX; // Try to occupy player's lane
-                        laneChangeSpeed = 5.0; // Aggressive lane change
-                    }
-                }
-            }
-
-            // --- ALGORITHM 3: CAUTIOUS (Grandma) ---
-            else if (mode === 'cautious') {
-                targetSpeed *= 0.6; // Slow
-                steerFactor = 0.5;  // Gentle turns
-                
-                // Avoid player at all costs
-                if (player1) {
-                    const pPos = player1.body.getPosition();
-                    if (pl.Vec2.distance(pos, pPos) < 40) {
-                        targetSpeed *= 0.5; // Brake hard if player near
-                        // Stick to outer edge (simple avoidance)
-                        laneBias = (pos.x > 0) ? 5 : -5; 
-                    }
-                }
-            }
-
-            // --- ALGORITHM 4: ERRATIC (Drunk) ---
-            else if (mode === 'erratic') {
-                // Speed waves
-                const time = Date.now() / 1000;
-                targetSpeed *= (0.8 + Math.sin(time * 2) * 0.4); 
-                
-                // Weave back and forth
-                laneBias = Math.sin(time * 3) * 3.0; 
-                
-                // Random twitching
-                if (Math.random() < 0.02) {
-                    this.body.setAngularVelocity((Math.random() - 0.5) * 5);
-                }
-            }
-
-            // --- ALGORITHM 5: RACER (Speed) ---
-            else if (mode === 'racer') {
-                targetSpeed *= 1.8; // Very fast
-                laneChangeSpeed = 3.0;
-                
-                // Corner cutting logic (simple version)
-                // If turning left, enter form right, exit right (Apexing)
-                const angleDiffVal = angleDiff(this.aiTargetAngle, this.body.getAngle());
-                if (Math.abs(angleDiffVal) > 0.5) {
-                    // Slow less for corners
-                     targetSpeed *= 0.8; 
-                } else {
-                    // Overtake logic: If blocked by another car, switch lane
-                    // (Simplified: just weave constantly to find gaps)
-                    const time = Date.now() / 500;
-                    laneBias = Math.sin(time) * 2.0; 
-                }
-            }
-
-            // --- 4. PHYSICS APPLICATION ---
+            // --- 3. STEERING ---
             const currentAngle = this.body.getAngle();
             const angleToTarget = angleDiff(this.aiTargetAngle, currentAngle);
+            let steer = 0;
+            let throttle = 0;
+            let brake = false;
 
-            // Steering
             if (Math.abs(angleToTarget) > 0.1) {
-                const turnRate = 3.0 * steerFactor * dt;
-                const turnAmt = clamp(angleToTarget, -turnRate, turnRate);
-                this.body.setAngle(currentAngle + turnAmt);
-                this.speed = targetSpeed * 0.6; // Slow down in turns
+                steer = angleToTarget > 0 ? -1 : 1; // Inverted steering model from input
+                throttle = 0.5; // Slow down
             } else {
-                // Straightening & Lane Correction
-                this.body.setAngle(currentAngle + angleToTarget * 0.1);
-                
-                // Lane Logic (Only applies on Highway/Default map mostly)
-                if (physVel > 5.0 && distToCenter > 4.0 && currentMapType === 'default') {
-                    let idealX = tileX;
-                    const cosA = Math.cos(this.aiTargetAngle);
-                    
-                    // Determine base lane
-                    if (Math.abs(cosA) > 0.5) { // Vertical driving
-                         if (pos.x > 0) idealX = 4.5 + (pos.x > 4.5 ? 2 : -2); 
-                         else idealX = -4.5 + (pos.x < -4.5 ? -2 : 2);
-                    }
-                    
-                    // Apply Algorithm Bias
-                    idealX += laneBias;
-
-                    // Apply Correction
-                    const diffX = idealX - pos.x;
-                    if (Math.abs(diffX) > 0.2) {
-                        this.vx += diffX * laneChangeSpeed * dt; 
-                    }
-                }
-                this.speed = targetSpeed;
+                steer = angleToTarget * -2.0; // P-controller
+                throttle = 1.0;
             }
+
+            // Speed Limit
+            const maxVel = this.maxSpeed / 3.6;
+            if (physVel > maxVel) throttle = 0;
+
+            this.drive(throttle, clamp(steer, -1, 1), brake);
         }
 
         makeTurnDecision(cx, cz) {
@@ -517,67 +602,22 @@ document.addEventListener('DOMContentLoaded', () => {
             if (valid.length === 0) return; 
 
             const getRel = (target) => angleDiff(target, this.aiTargetAngle);
-
             const straight = valid.find(n => Math.abs(getRel(n.angle)) < 0.1);
             const left     = valid.find(n => Math.abs(getRel(n.angle) - Math.PI/2) < 0.1); 
             const right    = valid.find(n => Math.abs(getRel(n.angle) + Math.PI/2) < 0.1);
 
             let selected = null;
-
             if (this.plannedAction === 'left' && left) selected = left;
             else if (this.plannedAction === 'right' && right) selected = right;
             else if (straight) selected = straight;
             else selected = left || right;
 
-            if (!selected) {
-                const nonU = valid.filter(n => Math.abs(getRel(n.angle) - Math.PI) > 0.1);
-                if(nonU.length > 0) selected = nonU[Math.floor(Math.random()*nonU.length)];
-                else selected = valid[0];
-            }
-            this.aiTargetAngle = selected.angle;
-
-            if (this.plannedAction === 'left') {
-                 this.plannedAction = (Math.random() < 0.3) ? 'left' : 'straight';
-            } else if (this.plannedAction === 'right') {
-                 this.plannedAction = (Math.random() < 0.6) ? 'right' : 'straight';
-            }
-        }
-
-        drive(throttle, steer) {
-            // --- HAND BRAKE STATE ---
-            this.handbrake = keys[' '] || keys['shift'];
-
-            // --- ACCELERATION ---
-            const accel = this.power * 0.002;
-            if (throttle !== 0) {
-                this.speed += throttle * accel;
-            }
-
-            // --- TURNING (Updated for stability) ---
-            if (Math.abs(this.speed) > 0.1) {
-                const speedAbs = Math.abs(this.speed);
-                
-                // 1. Steering Authority: Ramp up quickly at low speed (0-15)
-                // This ensures steering feels responsive ("stays the same") as you start moving.
-                const authority = Math.min(1.0, speedAbs / 15.0);
-                
-                // 2. High Speed Damping: Reduce steering sensitivity as you approach max speed.
-                // This makes the car "turn slower the faster it goes" to prevent rickety/twitchy handling.
-                const maxVelUnit = this.maxSpeed / 3.6;
-                const speedFraction = Math.min(1.0, speedAbs / maxVelUnit);
-                // Damping factor: 1.0 at low speed, drops to 0.5 at max speed.
-                const dampening = 1.0 - (speedFraction * 0.5); 
-                
-                // Calculate turn amount
-                // Note: removed linear `ratio` scaling. Using a fixed base multiplier (0.006)
-                // coupled with authority and dampening gives consistent control.
-                const turn = steer * gameParams.gtaTurnFactor * authority * dampening * 0.006;
-
-                const dir = this.speed > 0 ? 1 : -1;
-                
-                this.body.setAngle(
-                    this.body.getAngle() - (turn * dir)
-                );
+            if (!selected && valid.length > 0) selected = valid[Math.floor(Math.random()*valid.length)];
+            
+            if(selected) {
+                this.aiTargetAngle = selected.angle;
+                if (this.plannedAction === 'left') this.plannedAction = (Math.random() < 0.3) ? 'left' : 'straight';
+                else if (this.plannedAction === 'right') this.plannedAction = (Math.random() < 0.6) ? 'right' : 'straight';
             }
         }
 
@@ -592,18 +632,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const spawnDist = 3.0; 
             const speed = 60;
             
-            createBullet(
-                pos.x + fwd.x*spawnDist - right.x*gunOffset, 
-                pos.y + fwd.y*spawnDist - right.y*gunOffset, 
-                fwd.x*speed, fwd.y*speed, 
-                this.playerIndex
-            );
-            createBullet(
-                pos.x + fwd.x*spawnDist + right.x*gunOffset, 
-                pos.y + fwd.y*spawnDist + right.y*gunOffset, 
-                fwd.x*speed, fwd.y*speed, 
-                this.playerIndex
-            );
+            createBullet(pos.x + fwd.x*spawnDist - right.x*gunOffset, pos.y + fwd.y*spawnDist - right.y*gunOffset, fwd.x*speed, fwd.y*speed, this.playerIndex);
+            createBullet(pos.x + fwd.x*spawnDist + right.x*gunOffset, pos.y + fwd.y*spawnDist + right.y*gunOffset, fwd.x*speed, fwd.y*speed, this.playerIndex);
             this.shootCooldown = 0.2;
         }
     }
@@ -612,12 +642,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
         const mat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
         const mesh = new THREE.Mesh(geo, mat);
-        
         if (gameParams.bulletGlow) {
             const light = new THREE.PointLight(0xffaa00, 5, 15);
             mesh.add(light);
         }
-
         const body = world.createBody({ type: 'dynamic', position: pl.Vec2(x, y), bullet: true });
         body.createFixture(pl.Circle(0.15), { filterCategoryBits: CAT_BULLET, filterMaskBits: CAT_ENEMY | CAT_WALL });
         body.setLinearVelocity(pl.Vec2(vx, vy));
@@ -655,19 +683,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function buildRoadLookup() {
-        roadLookup = {};
-        roadTiles.forEach(t => {
-            roadLookup[`${t.x},${t.z}`] = true;
-        });
-    }
-
-    // --- INFINITE HIGHWAY LOGIC (Bi-Directional) ---
+    // --- INFINITE HIGHWAY LOGIC ---
     function createHighwayChunk(zStart) {
         const chunk = { zStart: zStart, meshes: [], bodies: [], roadData: [] };
         const matType = gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial;
 
-        // Ground Plane
+        // Ground
         const planeGeo = new THREE.PlaneGeometry(400, CHUNK_LENGTH);
         const roadTex = createProceduralTexture('road');
         roadTex.repeat.set(40, CHUNK_LENGTH/10);
@@ -679,7 +700,6 @@ document.addEventListener('DOMContentLoaded', () => {
         scene.add(ground);
         chunk.meshes.push(ground);
 
-        // Helper to track walls
         const addWall = (x, z, w, h) => {
             const body = world.createBody(pl.Vec2(x, z));
             body.createFixture(pl.Box(w/2, h/2), { filterCategoryBits: CAT_WALL });
@@ -688,35 +708,23 @@ document.addEventListener('DOMContentLoaded', () => {
         addWall(-40, zStart + CHUNK_LENGTH/2, 2, CHUNK_LENGTH);
         addWall(40, zStart + CHUNK_LENGTH/2, 2, CHUNK_LENGTH);
 
-        // Buildings/Scenery
         const boxGeo = new THREE.BoxGeometry(1,1,1);
         const addBuilding = (x, z) => {
             const h = Math.random() * 15 + 5;
             const w = Math.random() * 8 + 6;
-            
-            // Textures
             const buildTex = createProceduralTexture('building');
             buildTex.repeat.set(w/10, h/10);
-            
             const roofTex = createProceduralTexture('roof');
             roofTex.repeat.set(w/10, w/10);
-            
-            const MatClass = gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial;
-            
-            // Materials for sides and roof
-            const sideMat = new MatClass({ map: buildTex, roughness: 0.2 });
-            const roofMat = new MatClass({ map: roofTex, roughness: 0.5 });
-            
-            // Array: [Right, Left, Top, Bottom, Front, Back]
+            const sideMat = new matType({ map: buildTex, roughness: 0.2 });
+            const roofMat = new matType({ map: roofTex, roughness: 0.5 });
             const materials = [sideMat, sideMat, roofMat, roofMat, sideMat, sideMat];
-
             const bMesh = new THREE.Mesh(boxGeo, materials);
             bMesh.position.set(x, h/2, z);
             bMesh.scale.set(w, h, w);
             bMesh.castShadow = true; bMesh.receiveShadow = true;
             scene.add(bMesh);
             chunk.meshes.push(bMesh);
-            
             const body = world.createBody(pl.Vec2(x, z));
             body.createFixture(pl.Box(w/2, w/2), { filterCategoryBits: CAT_WALL });
             chunk.bodies.push(body);
@@ -726,7 +734,7 @@ document.addEventListener('DOMContentLoaded', () => {
             addBuilding(-35, z); addBuilding(35, z);
         }
 
-        // Road Tiles for AI
+        // AI Nodes
         for(let z = zStart; z < zStart + CHUNK_LENGTH; z += 20) {
             const t1={x: -15, z: z}, t2={x: 0, z: z}, t3={x: 15, z: z};
             roadTiles.push(t1, t2, t3);
@@ -738,40 +746,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function createCity() {
-        // Initialize infinite highway: Create center, behind, and ahead
         highwayChunks = [];
         roadTiles = [];
         roadLookup = {};
-        
-        createHighwayChunk(-CHUNK_LENGTH); // Behind (North)
-        createHighwayChunk(0);             // Center
-        createHighwayChunk(CHUNK_LENGTH);  // Ahead (South)
+        createHighwayChunk(-CHUNK_LENGTH); 
+        createHighwayChunk(0);             
+        createHighwayChunk(CHUNK_LENGTH);  
     }
 
     function updateHighway() {
         if (currentMapType !== 'default' || !player1) return;
         const pZ = player1.body.getPosition().y; 
-        
-        // Determine which chunk index the player is in
         const currentChunkIdx = Math.floor(pZ / CHUNK_LENGTH);
-
-        // Ensure chunks exist at [current-1, current, current+1]
         [-1, 0, 1].forEach(offset => {
             const targetIdx = currentChunkIdx + offset;
             const targetZ = targetIdx * CHUNK_LENGTH;
-            
-            // Check if chunk exists
             const exists = highwayChunks.some(c => Math.abs(c.zStart - targetZ) < 1);
-            if (!exists) {
-                createHighwayChunk(targetZ);
-            }
+            if (!exists) createHighwayChunk(targetZ);
         });
 
-        // Cleanup distant chunks
         for (let i = highwayChunks.length - 1; i >= 0; i--) {
             const chunk = highwayChunks[i];
             const chunkIdx = Math.round(chunk.zStart / CHUNK_LENGTH);
-            
             if (Math.abs(chunkIdx - currentChunkIdx) > 2) {
                 chunk.meshes.forEach(m => { 
                     scene.remove(m); 
@@ -804,99 +800,58 @@ document.addEventListener('DOMContentLoaded', () => {
         for(let z=0; z<height; z++) {
             for(let x=0; x<width; x++) {
                 if(grid[z][x] === ' ') {
-                    roads.push({ 
-                        x: (x * BLOCK_SIZE) - (width * BLOCK_SIZE / 2), 
-                        z: (z * BLOCK_SIZE) - (height * BLOCK_SIZE / 2) 
-                    });
+                    roads.push({ x: (x * BLOCK_SIZE) - (width * BLOCK_SIZE / 2), z: (z * BLOCK_SIZE) - (height * BLOCK_SIZE / 2) });
                 }
             }
         }
         return { grid, roads };
     }
 
+    function buildRoadLookup() {
+        roadLookup = {};
+        roadTiles.forEach(t => { roadLookup[`${t.x},${t.z}`] = true; });
+    }
+
     function spawnTraffic() {
         if (loadedTextures.length === 0 || !player1) return;
-        
         const pPos = player1.body.getPosition();
-        // In updated physics, use mesh rotation or store fwd vector, but simple math works
         const pAngle = player1.body.getAngle();
         const pDir = pl.Vec2(-Math.sin(pAngle), Math.cos(pAngle));
-
         const spawnRadius = gameParams.spawnRadius;
-        const limit = gameParams.trafficCount;
 
-        // --- CULLING ---
         for(let i = trafficPool.length - 1; i >= 0; i--) {
-            const car = trafficPool[i];
-            const carPos = car.body.getPosition();
-            const dist = pl.Vec2.distance(carPos, pPos);
-            
-            if (dist > spawnRadius) {
-                car.markedForDeletion = true; 
+            if (pl.Vec2.distance(trafficPool[i].body.getPosition(), pPos) > spawnRadius) {
+                trafficPool[i].markedForDeletion = true; 
             }
         }
 
-        // --- SPAWNING ---
-        if (trafficPool.length < limit) {
+        if (trafficPool.length < gameParams.trafficCount) {
              const tex = loadedTextures[Math.floor(Math.random() * loadedTextures.length)];
-             
-             let validTile = null;
-             let attempts = 0;
-             const spawnMax = spawnRadius - 5;
-             const spawnMin = spawnRadius - 45; 
-
+             let validTile = null, attempts = 0;
              while(!validTile && attempts < 15) {
                  const tile = roadTiles[Math.floor(Math.random() * roadTiles.length)];
                  const tileVec = pl.Vec2(tile.x, tile.z);
                  const toTile = pl.Vec2.sub(tileVec, pPos);
-                 const dist = toTile.length();
-                 const dot = pl.Vec2.dot(toTile, pDir);
-
-                 // Spawn generally in front of player, or slightly behind
-                 if (dist > spawnMin && dist < spawnMax && dot > -30) {
-                     let blocked = false;
-                     for(let c of trafficPool) {
-                         if(pl.Vec2.distance(c.body.getPosition(), tileVec) < 15) {
-                             blocked = true; break;
-                         }
-                     }
-                     if(!blocked) validTile = tile;
+                 if (toTile.length() > spawnRadius - 45 && toTile.length() < spawnRadius - 5 && pl.Vec2.dot(toTile, pDir) > -30) {
+                     if(!trafficPool.some(c => pl.Vec2.distance(c.body.getPosition(), tileVec) < 15)) validTile = tile;
                  }
                  attempts++;
              }
-
              if (!validTile) return; 
 
-             let x = validTile.x;
-             let z = validTile.z;
-             let angle = 0;
-             
-             // --- INFINITE HIGHWAY SPAWN LOGIC ---
+             let x = validTile.x, z = validTile.z, angle = 0;
              if (currentMapType === 'default') {
                  trafficSpawnCounter++;
-                 const laneIndex = trafficSpawnCounter % 4;
-                 
-                 if (laneIndex === 0) x = 2.5;  // Inner Right
-                 if (laneIndex === 1) x = 6.5;  // Outer Right
-                 if (laneIndex === 2) x = -2.5; // Inner Left
-                 if (laneIndex === 3) x = -6.5; // Outer Left
-                 
-                 if (x > 0) angle = 0; // South
-                 else angle = Math.PI; // North
-                 
+                 const lane = trafficSpawnCounter % 4;
+                 x = (lane === 0) ? 2.5 : (lane === 1) ? 6.5 : (lane === 2) ? -2.5 : -6.5;
+                 angle = x > 0 ? 0 : Math.PI;
              } else {
-                 if (Math.random() > 0.5) angle = 0; else angle = Math.PI/2;
+                 angle = (Math.random() > 0.5) ? 0 : Math.PI/2;
              }
-
-             while (angle <= -Math.PI) angle += 2*Math.PI;
-             while (angle > Math.PI) angle -= 2*Math.PI;
 
              const car = new Car(x, z, false, 0, tex, 'straight', 0);
              car.body.setAngle(angle);
              car.aiTargetAngle = angle;
-             car.body.setAwake(true);
-             car.speed = gameParams.enemySpeed / 3.6; // Set scalar speed for new physics
-             
              entities.push(car);
              trafficPool.push(car);
         }
@@ -909,15 +864,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const entB = entities.find(e => e.body === b);
         if(!entA || !entB) return;
 
-        // --- GTA1 BOUNCE EFFECT ---
+        // Bounce Logic
         if (entA instanceof Car || entB instanceof Car) {
             const car = entA instanceof Car ? entA : entB;
-            // Cut speed drastically on impact
-            car.speed *= 0.3;
-            // Add a slight random spin to simulate loss of control
-            car.body.setAngle(
-                car.body.getAngle() + (Math.random() - 0.5) * 0.4
-            );
+            car.speed *= 0.3; // Old physics speed prop
+            // New physics naturally handles bounce via restitution
         }
 
         if(entA.isBullet || entB.isBullet) {
@@ -926,20 +877,14 @@ document.addEventListener('DOMContentLoaded', () => {
             if(target instanceof Car && !target.isPlayer) {
                 bullet.markedForDeletion = true;
                 target.markedForDeletion = true; 
-                if(bullet.owner === 1) p1Score += 100;
-                else p2Score += 100;
+                if(bullet.owner === 1) p1Score += 100; else p2Score += 100;
                 createExplosion(target.mesh.position);
-                updateHUD();
+                p1ScoreEl.innerText = `P1: ${p1Score}`; p2ScoreEl.innerText = `P2: ${p2Score}`;
             } else if (!target.isPlayer) {
                 bullet.markedForDeletion = true; 
             }
         }
     });
-
-    function updateHUD() {
-        p1ScoreEl.innerText = `P1: ${p1Score}`;
-        p2ScoreEl.innerText = `P2: ${p2Score}`;
-    }
 
     const keys = {};
     window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
@@ -954,59 +899,59 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!gameActive || isPaused) return;
 
         if (Math.random() < 0.1) spawnTraffic();
-        updateHighway(); // Bi-directional logic
-
+        updateHighway();
         world.step(TIME_STEP, velIter, posIter);
+
+        // --- SKID MARKS UPDATE ---
+        for (let i = skidMarks.length - 1; i >= 0; i--) {
+            if (!skidMarks[i].update(dt)) {
+                skidMarks[i].destroy();
+                skidMarks.splice(i, 1);
+            }
+        }
 
         const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
         for (let i = 0; i < gamepads.length; i++) {
             const gp = gamepads[i];
-            if (gp) {
-                if (gp.buttons.some((b, idx) => idx < 4 && b.pressed)) {
-                    if (gamepadAssignments.p1 === null && gamepadAssignments.p2 !== gp.index) gamepadAssignments.p1 = gp.index;
-                    else if (gamepadAssignments.p2 === null && gamepadAssignments.p1 !== gp.index) gamepadAssignments.p2 = gp.index;
-                }
+            if (gp && gp.buttons.some((b, idx) => idx < 4 && b.pressed)) {
+                if (gamepadAssignments.p1 === null && gamepadAssignments.p2 !== gp.index) gamepadAssignments.p1 = gp.index;
+                else if (gamepadAssignments.p2 === null && gamepadAssignments.p1 !== gp.index) gamepadAssignments.p2 = gp.index;
             }
         }
 
         if (player1) {
-            let throttle = 0, steer = 0, shoot = false;
+            let throttle = 0, steer = 0, shoot = false, handbrake = false;
             if (keys['arrowup']) throttle = 1; if (keys['arrowdown']) throttle = -1;
-            
-            // --- INVERTED STEERING (Requested) ---
-            // Left key now produces Positive steer (1) -> Turns Right
-            // Right key now produces Negative steer (-1) -> Turns Left
-            if (keys['arrowleft']) steer = 1; 
-            if (keys['arrowright']) steer = -1; 
-
+            if (keys['arrowleft']) steer = 1; if (keys['arrowright']) steer = -1; 
             if (keys['control']) shoot = true; 
+            if (keys[' '] || keys['shift']) handbrake = true;
+
             if (gamepadAssignments.p1 !== null && gamepads[gamepadAssignments.p1]) {
                 const gp = gamepads[gamepadAssignments.p1];
-                if (Math.abs(gp.axes[0]) > 0.2) steer = -gp.axes[0]; // Inverted Axis
+                if (Math.abs(gp.axes[0]) > 0.2) steer = -gp.axes[0]; 
                 if (gp.buttons[0]?.pressed || gp.buttons[12]?.pressed) throttle = 1;
                 if (gp.buttons[13]?.pressed || gp.axes[1] > 0.5) throttle = -1;
                 if (gp.buttons[1]?.pressed || gp.buttons[2]?.pressed) shoot = true;
+                if (gp.buttons[4]?.pressed || gp.buttons[5]?.pressed) handbrake = true;
             }
-            player1.drive(throttle, steer);
+            player1.drive(throttle, steer, handbrake);
             if (shoot) player1.shoot();
         }
 
         if (player2) {
-            let throttle = 0, steer = 0, shoot = false;
+            let throttle = 0, steer = 0, shoot = false, handbrake = false;
             if (keys['w']) throttle = 1; if (keys['s']) throttle = -1;
-            
-            // --- INVERTED STEERING (Requested) ---
-            if (keys['a']) steer = 1; 
-            if (keys['d']) steer = -1; 
-            
+            if (keys['a']) steer = 1; if (keys['d']) steer = -1; 
             if (keys['f']) shoot = true;
+            if (keys[' ']) handbrake = true; 
+            
             if (gamepadAssignments.p2 !== null && gamepads[gamepadAssignments.p2]) {
                 const gp = gamepads[gamepadAssignments.p2];
-                if (Math.abs(gp.axes[0]) > 0.2) steer = -gp.axes[0]; // Inverted Axis
+                if (Math.abs(gp.axes[0]) > 0.2) steer = -gp.axes[0]; 
                 if (gp.buttons[0]?.pressed) throttle = 1;
                 if (gp.buttons[1]?.pressed) shoot = true;
             }
-            player2.drive(throttle, steer);
+            player2.drive(throttle, steer, handbrake);
             if (shoot) player2.shoot();
         }
 
@@ -1017,45 +962,28 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // --- ABSOLUTE CULLING ---
-        if (player1 && player1.body) {
-             const pPos = player1.body.getPosition();
-             const radiusSq = gameParams.spawnRadius * gameParams.spawnRadius;
-             
-             for (let i = entities.length - 1; i >= 0; i--) {
-                 if (entities[i] === player1 || entities[i] === player2) {
-                     entities[i].update(dt);
-                     continue;
-                 }
+        // Entity Cleanup
+        for (let i = entities.length - 1; i >= 0; i--) {
+             if (entities[i] === player1 || entities[i] === player2) {
                  entities[i].update(dt);
-                 if (entities[i] instanceof Car && !entities[i].isPlayer) {
-                     const cPos = entities[i].body.getPosition();
-                     const dSq = (cPos.x - pPos.x)**2 + (cPos.y - pPos.y)**2;
-                     if (dSq > radiusSq) {
-                         entities[i].markedForDeletion = true;
-                     }
-                 }
-                 if (entities[i].markedForDeletion) {
-                     entities[i].destroy();
-                     entities.splice(i, 1);
-                     const idx = trafficPool.indexOf(entities[i]);
-                     if(idx > -1) trafficPool.splice(idx, 1);
-                 }
+                 continue;
              }
-        } else {
-             for (let i = entities.length - 1; i >= 0; i--) {
-                 entities[i].update(dt);
+             entities[i].update(dt);
+             if (entities[i].markedForDeletion) {
+                 entities[i].destroy();
+                 entities.splice(i, 1);
+                 const idx = trafficPool.indexOf(entities[i]);
+                 if(idx > -1) trafficPool.splice(idx, 1);
              }
         }
 
+        // Camera
         if (player1 && player1.mesh) {
-            if(camera.fov !== gameParams.cameraFOV) {
-                camera.fov = gameParams.cameraFOV;
-                camera.updateProjectionMatrix();
-            }
+            if(camera.fov !== gameParams.cameraFOV) { camera.fov = gameParams.cameraFOV; camera.updateProjectionMatrix(); }
             const targetX = player1.mesh.position.x;
             const distH = gameParams.topDownMode ? 0.1 : 20; 
-            let finalCamX, finalCamZ;
+            let finalCamX = targetX, finalCamZ = player1.mesh.position.z + distH;
+            
             if (gameParams.cameraRotate) {
                  const angle = player1.body.getAngle(); 
                  finalCamX = targetX + (-Math.sin(angle) * distH);
@@ -1063,8 +991,6 @@ document.addEventListener('DOMContentLoaded', () => {
                  if(gameParams.topDownMode) camera.up.set(Math.sin(angle), 0, Math.cos(angle));
                  else camera.up.set(0,1,0);
             } else {
-                 finalCamX = targetX;
-                 finalCamZ = player1.mesh.position.z + distH;
                  if(gameParams.topDownMode) camera.up.set(0,0,-1);
                  else camera.up.set(0,1,0);
             }
@@ -1072,45 +998,37 @@ document.addEventListener('DOMContentLoaded', () => {
             camera.position.z += (finalCamZ - camera.position.z) * 0.1;
             camera.position.y += (gameParams.cameraHeight - camera.position.y) * 0.1;
             camera.lookAt(targetX, 0, player1.mesh.position.z);
+            
             dirLight.position.x = player1.mesh.position.x + 50;
             dirLight.position.z = player1.mesh.position.z + 50;
             dirLight.target.position.set(player1.mesh.position.x, 0, player1.mesh.position.z);
             dirLight.target.updateMatrixWorld();
         }
-
         renderer.render(scene, camera);
     }
 
     // --- Start ---
     window.startGameWithMap = function(type) {
         currentMapType = type;
-        gameParams.simpleMaterials = document.getElementById('simpleMatToggle').checked;
-        gameParams.particlesEnabled = document.getElementById('particlesToggle').checked;
-        gameParams.bulletGlow = document.getElementById('bulletGlowToggle').checked;
-        if(document.getElementById('litePhysicsToggle').checked) { velIter = 2; posIter = 1; }
-        
         document.getElementById('startScreen').classList.add('hidden');
         document.getElementById('customizeMenu').classList.add('hidden');
         document.getElementById('gameHeader').classList.remove('hidden');
         document.getElementById('hud').classList.remove('hidden');
+        document.getElementById('optionsHint').classList.remove('hidden');
         isPaused = false;
         
         loadAssets().then(() => {
             entities.forEach(e => e.destroy());
-            entities = [];
-            trafficPool = [];
+            skidMarks.forEach(s => s.destroy());
+            entities = []; trafficPool = []; skidMarks = [];
             
-            if(type === 'default') {
-                createCity(); // Starts the infinite highway
-            } else {
-                // Maze/City Generation Mode
+            if(type === 'default') createCity(); 
+            else {
                 let w=20, h=20;
                 if(type === 'medium') {w=40; h=40;}
                 if(type === 'large') {w=60; h=60;}
-                
                 const data = generateMazeData(w,h);
-                mapGrid = data.grid;
-                roadTiles = data.roads;
+                mapGrid = data.grid; roadTiles = data.roads;
                 buildRoadLookup();
 
                 const pg = new THREE.PlaneGeometry(w*BLOCK_SIZE*1.2, h*BLOCK_SIZE*1.2);
@@ -1122,29 +1040,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 scene.add(g);
 
                 const boxGeo = new THREE.BoxGeometry(1,1,1);
-                const wallOffX = w * BLOCK_SIZE / 2;
-                const wallOffZ = h * BLOCK_SIZE / 2;
-
+                const wallOffX = w * BLOCK_SIZE / 2, wallOffZ = h * BLOCK_SIZE / 2;
                 for (let z = 0; z < h; z++) {
                     for (let x = 0; x < w; x++) {
                         if (mapGrid[z][x] === '#') {
                             const height = Math.random() * 25 + 5;
-                            
-                            // Textures
                             const buildTex = createProceduralTexture('building');
                             buildTex.repeat.set(BLOCK_SIZE/10, height/10);
-                            
                             const roofTex = createProceduralTexture('roof');
-                            // No specific repeat needed for basic roof
-                            
-                            // Materials
-                            const MatClass = gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial;
-                            const sideMat = new MatClass({map: buildTex});
-                            const roofMat = new MatClass({map: roofTex});
-                            
-                            // Array: [Right, Left, Top, Bottom, Front, Back]
+                            const sideMat = new (gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial)({map: buildTex});
+                            const roofMat = new (gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial)({map: roofTex});
                             const materials = [sideMat, sideMat, roofMat, roofMat, sideMat, sideMat];
-
                             const mesh = new THREE.Mesh(boxGeo, materials);
                             mesh.scale.set(BLOCK_SIZE, height, BLOCK_SIZE);
                             const wx = (x * BLOCK_SIZE) - wallOffX;
@@ -1164,91 +1070,75 @@ document.addEventListener('DOMContentLoaded', () => {
                  const s = roadTiles[Math.floor(roadTiles.length/2)];
                  sx = s.x; sz = s.z;
             }
-            
             player1 = new Car(sx, sz, true, 1, loadedTextures[0]);
             player2 = new Car(sx - 10, sz, true, 2, loadedTextures[1]);
-            entities.push(player1);
-            entities.push(player2);
-            
-            gameActive = true;
-            animate(0);
+            entities.push(player1); entities.push(player2);
+            gameActive = true; animate(0);
         });
     };
-
-    // --- UI & Event Listeners ---
-    const customMenuGroup = document.querySelector('#customizeMenu .setting-group');
-    if(customMenuGroup && !document.getElementById('bulletGlowToggle')) {
-        const div = document.createElement('div');
-        div.className = 'setting-row';
-        div.innerHTML = '<label>Bullet Glow:</label><input type="checkbox" id="bulletGlowToggle">';
-        customMenuGroup.appendChild(div);
-    }
-
-    const gameplayGroup = document.querySelectorAll('#customizeMenu .setting-group')[2]; 
-    if(gameplayGroup && !document.getElementById('radiusSlider')) {
-        const div = document.createElement('div');
-        div.className = 'setting-row';
-        div.innerHTML = '<label>Traffic Radius:</label><input type="range" id="radiusSlider" min="50" max="300" step="10" value="120"><span class="slider-value" id="radiusValue">120</span>';
-        gameplayGroup.appendChild(div);
-    }
-    
-    // --- AI Selector Logic ---
-    const aiSelect = document.getElementById('aiModeSelect');
-    if (aiSelect) {
-        aiSelect.addEventListener('change', (e) => {
-            gameParams.aiMode = e.target.value;
-            console.log("AI Mode switched to:", gameParams.aiMode);
-        });
-    }
 
     function toggleMenu(menu) {
         const isHidden = menu.classList.contains('hidden');
         helpMenu.classList.add('hidden');
         customizeMenu.classList.add('hidden');
+        optionsMenu.classList.add('hidden');
         if (isHidden) { menu.classList.remove('hidden'); isPaused = true; } 
         else { isPaused = false; }
     }
-    document.getElementById('customizeButton').addEventListener('click', () => toggleMenu(customizeMenu));
-    document.getElementById('helpButton').addEventListener('click', () => toggleMenu(helpMenu));
-    document.querySelector('.close-help').addEventListener('click', () => toggleMenu(helpMenu));
-    document.querySelector('.close-customize').addEventListener('click', () => toggleMenu(customizeMenu));
+
+    // --- Menus & Inputs ---
+    document.getElementById('customizeButton').onclick = () => toggleMenu(customizeMenu);
+    document.getElementById('helpButton').onclick = () => toggleMenu(helpMenu);
+    document.querySelector('.close-help').onclick = () => toggleMenu(helpMenu);
+    document.querySelector('.close-customize').onclick = () => toggleMenu(customizeMenu);
+    document.querySelector('.close-options').onclick = () => toggleMenu(optionsMenu);
     document.getElementById('newGameButton').onclick = () => location.reload();
     document.getElementById('restartCurrentButton').onclick = () => window.startGameWithMap(currentMapType);
+    
+    // Physics Toggles
+    const btnOld = document.getElementById('physOldBtn');
+    const btnNew = document.getElementById('physNewBtn');
+    const txtInfo = document.getElementById('physInfoText');
+    
+    btnOld.onclick = () => {
+        physicsMode = 'old';
+        btnOld.classList.add('active'); btnNew.classList.remove('active');
+        txtInfo.innerText = "Old: Classic Arcade. Sticky turns, tap to steer.";
+    };
+    btnNew.onclick = () => {
+        physicsMode = 'new';
+        btnNew.classList.add('active'); btnOld.classList.remove('active');
+        txtInfo.innerHTML = "New: Drifting, tire marks, spin-outs.<br>Spacebar to Handbrake.";
+    };
+
     window.addEventListener('keydown', (e) => {
         if (e.repeat) return;
         if (e.key.toLowerCase() === 'c') toggleMenu(customizeMenu);
         if (e.key.toLowerCase() === 'h') toggleMenu(helpMenu);
+        if (e.key.toLowerCase() === 'o') toggleMenu(optionsMenu);
     });
-    document.getElementById('shadowsToggle').addEventListener('change', (e) => {
+
+    document.getElementById('shadowsToggle').onchange = (e) => {
         dirLight.castShadow = e.target.checked;
         renderer.shadowMap.autoUpdate = e.target.checked;
         if(!e.target.checked) renderer.clearTarget(dirLight.shadow.map);
-    });
-    document.getElementById('headlightsToggle').addEventListener('change', (e) => gameParams.headlightsEnabled = e.target.checked);
-    document.getElementById('bulletGlowToggle').addEventListener('change', (e) => gameParams.bulletGlow = e.target.checked);
-    document.getElementById('lowResToggle').addEventListener('change', (e) => renderer.setPixelRatio(e.target.checked ? 0.5 : window.devicePixelRatio));
-    document.getElementById('litePhysicsToggle').addEventListener('change', (e) => { velIter = e.target.checked ? 2 : 8; posIter = e.target.checked ? 1 : 3; });
-    document.getElementById('simpleMatToggle').addEventListener('change', (e) => gameParams.simpleMaterials = e.target.checked);
-    document.getElementById('particlesToggle').addEventListener('change', (e) => gameParams.particlesEnabled = e.target.checked);
-    document.getElementById('topDownToggle').addEventListener('change', (e) => gameParams.topDownMode = e.target.checked);
-    document.getElementById('camRotateToggle').addEventListener('change', (e) => gameParams.cameraRotate = e.target.checked);
-    document.getElementById('camHeightSlider').addEventListener('input', (e) => { gameParams.cameraHeight = parseInt(e.target.value); document.getElementById('camHeightValue').innerText = e.target.value; });
-    document.getElementById('fovSlider').addEventListener('input', (e) => { gameParams.cameraFOV = parseInt(e.target.value); document.getElementById('fovValue').innerText = e.target.value; });
+    };
+    document.getElementById('headlightsToggle').onchange = (e) => gameParams.headlightsEnabled = e.target.checked;
+    document.getElementById('lowResToggle').onchange = (e) => renderer.setPixelRatio(e.target.checked ? 0.5 : window.devicePixelRatio);
+    document.getElementById('litePhysicsToggle').onchange = (e) => { velIter = e.target.checked ? 2 : 8; posIter = e.target.checked ? 1 : 3; };
+    document.getElementById('simpleMatToggle').onchange = (e) => gameParams.simpleMaterials = e.target.checked;
+    document.getElementById('particlesToggle').onchange = (e) => gameParams.particlesEnabled = e.target.checked;
+    document.getElementById('topDownToggle').onchange = (e) => gameParams.topDownMode = e.target.checked;
+    document.getElementById('camRotateToggle').onchange = (e) => gameParams.cameraRotate = e.target.checked;
+    document.getElementById('camHeightSlider').oninput = (e) => { gameParams.cameraHeight = parseInt(e.target.value); document.getElementById('camHeightValue').innerText = e.target.value; };
+    document.getElementById('fovSlider').oninput = (e) => { gameParams.cameraFOV = parseInt(e.target.value); document.getElementById('fovValue').innerText = e.target.value; };
+    document.getElementById('aiModeSelect').onchange = (e) => gameParams.aiMode = e.target.value;
+    
     const updateSlider = (id, paramKey, displayId) => {
         const el = document.getElementById(id);
-        if(el) el.addEventListener('input', (e) => { gameParams[paramKey] = parseInt(e.target.value); document.getElementById(displayId).innerText = parseInt(e.target.value); });
+        if(el) el.oninput = (e) => { gameParams[paramKey] = parseInt(e.target.value); document.getElementById(displayId).innerText = parseInt(e.target.value); };
     };
     updateSlider('playerSpeedSlider', 'playerSpeed', 'playerSpeedValue');
     updateSlider('enemySpeedSlider', 'enemySpeed', 'enemySpeedValue');
     updateSlider('densitySlider', 'trafficCount', 'densityValue');
-    
-    const rSlider = document.getElementById('radiusSlider');
-    if(rSlider) {
-        rSlider.addEventListener('input', (e) => {
-             const val = parseInt(e.target.value);
-             gameParams.spawnRadius = val;
-             document.getElementById('radiusValue').innerText = val;
-             scene.fog.far = val + 40; 
-        });
-    }
 });
