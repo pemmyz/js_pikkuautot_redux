@@ -329,7 +329,7 @@ document.addEventListener('DOMContentLoaded', () => {
             this.playerIndex = playerIndex;
             this.shootCooldown = 0;
             this.maxSpeed = isPlayer ? gameParams.playerSpeed : gameParams.enemySpeed;
-            this.power = isPlayer ? 300 : 150; 
+            this.power = isPlayer ? 900 : 150; 
             
             this.aiTargetAngle = 0;
             this.lastDecisionTile = null;
