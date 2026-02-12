@@ -432,9 +432,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // 1. Get Orientation Vectors
             const angle = body.getAngle();
-            // Forward is local -Y in ThreeJS, effectively 0,1 world with angle 0?
-            // In Planck here: Angle 0 = Up (0,1)? No, usually Right.
-            // Let's stick to the convention used in 'old': -sin(a), cos(a) is forward.
             const forwardNormal = pl.Vec2(-Math.sin(angle), Math.cos(angle));
             const rightNormal = pl.Vec2(Math.cos(angle), Math.sin(angle));
 
@@ -458,9 +455,9 @@ document.addEventListener('DOMContentLoaded', () => {
             body.applyLinearImpulse(impulse, body.getWorldCenter());
 
             // 3. Angular Control (Steering)
-            // If handbraking, allow car to spin freely (low angular damping). 
-            // If driving straight, dampen rotation.
-            if (this.handbrakeInput) {
+            // If handbraking AND moving significantly, allow car to spin freely.
+            // If stopped or normal driving, dampen rotation.
+            if (this.handbrakeInput && speed > 5.0) {
                 body.setAngularDamping(0.5); 
             } else {
                 body.setAngularDamping(4.0);
@@ -469,14 +466,19 @@ document.addEventListener('DOMContentLoaded', () => {
             // Apply steering torque / angular velocity
             if (Math.abs(this.steerInput) > 0.01) {
                 // Steer stronger if handbraking to whip the car around
-                const steerPower = this.handbrakeInput ? 6.0 : 3.0; 
+                let steerPower = this.handbrakeInput ? 6.0 : 3.0; 
+                
+                // --- FIX: Scale steering based on speed when handbraking ---
+                if (this.handbrakeInput) {
+                    // Map speed 0->10 to factor 0.0->1.0
+                    const speedFactor = Math.min(1.0, speed / 10.0);
+                    steerPower *= speedFactor;
+                }
                 
                 // Inverse steering direction for reverse?
                 let dir = 1;
                 if (forwardVel < -5) dir = -1; // Reverse steering
                 
-                // Apply rotation logic. 
-                // We use angular impulse or set velocity for snappiness.
                 const currentAngVel = body.getAngularVelocity();
                 const targetAngVel = -this.steerInput * steerPower * dir;
                 
