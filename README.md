@@ -7,6 +7,9 @@ Drive north, dodge traffic, shoot enemies, and survive in an infinite highway or
 
 This project is fully browser-based, requires no build step, and runs entirely on the client.
 
+
+## Play it now: https://pemmyz.github.io/js_pikkuautot_redux/
+
 ---
 
 ## Screenshots
