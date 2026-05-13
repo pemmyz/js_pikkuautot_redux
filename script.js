@@ -23,11 +23,14 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentMapType = 'default';
     let physicsMode = 'new'; // 'old' or 'new'
     
+    // --- Split-Screen & Player State ---
+    let gameMode = '1p'; 
+    let numPlayers = 1;
+    let devices = { p1: null, p2: null }; 
+
     // --- Infinite Highway State ---
     let highwayChunks = [];
     const CHUNK_LENGTH = 400;
-    
-    let gamepadAssignments = { p1: null, p2: null }; 
 
     let gameParams = {
         playerSpeed: 300, // Player Speed Scalar
@@ -83,9 +86,16 @@ document.addEventListener('DOMContentLoaded', () => {
     scene.background = new THREE.Color(0x222222);
     scene.fog = new THREE.Fog(0x222222, 50, 160); 
 
-    const camera = new THREE.PerspectiveCamera(gameParams.cameraFOV, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, gameParams.cameraHeight, 30); 
-    camera.lookAt(0, 0, 0);
+    const camera1 = new THREE.PerspectiveCamera(gameParams.cameraFOV, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera1.position.set(0, gameParams.cameraHeight, 30); 
+
+    const camera2 = new THREE.PerspectiveCamera(gameParams.cameraFOV, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera2.position.set(0, gameParams.cameraHeight, 30); 
+
+    // Handle Window Resize
+    window.addEventListener('resize', () => {
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
     scene.add(ambientLight);
@@ -156,7 +166,6 @@ document.addEventListener('DOMContentLoaded', () => {
             ctx.fillStyle = '#666666';
             ctx.fillRect(20, 20, 20, 20); 
         } else if (type === 'skid') {
-            // Semi-transparent black tire mark
             ctx.clearRect(0,0,128,128);
             ctx.fillStyle = 'rgba(10, 10, 10, 0.6)';
             ctx.fillRect(0,0,128,128);
@@ -202,7 +211,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return Promise.all(promises);
     }
 
-    // --- Helper Math ---
     function clamp(v, min, max) {
         return Math.max(min, Math.min(max, v));
     }
@@ -242,7 +250,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // --- Skid Mark System ---
     class SkidMark {
         constructor(x, y, angle) {
             const geo = new THREE.PlaneGeometry(0.8, 0.8);
@@ -252,14 +259,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 opacity: 0.5, 
                 depthWrite: false,
                 polygonOffset: true,
-                polygonOffsetFactor: -1 // Draw just above road
+                polygonOffsetFactor: -1
             });
             this.mesh = new THREE.Mesh(geo, mat);
-            this.mesh.position.set(x, 0.05, y); // Slightly above ground
+            this.mesh.position.set(x, 0.05, y); 
             this.mesh.rotation.x = -Math.PI / 2;
             this.mesh.rotation.z = angle;
             scene.add(this.mesh);
-            this.life = 4.0; // Seconds before fade
+            this.life = 4.0; 
         }
         update(dt) {
             this.life -= dt;
@@ -337,12 +344,12 @@ document.addEventListener('DOMContentLoaded', () => {
             this.laneOffset = laneOffset; 
             this.stuckTimer = 0; 
 
-            // --- Control Inputs ---
+            // Control Inputs
             this.throttleInput = 0;
             this.steerInput = 0;
             this.handbrakeInput = false;
 
-            // --- GTA1 Arcade State ---
+            // Arcade State
             this.speed = 0;
             this.vx = 0;
             this.vy = 0;
@@ -366,50 +373,37 @@ document.addEventListener('DOMContentLoaded', () => {
             this.handbrakeInput = handbrake;
         }
 
-        // --- OLD: Direct Velocity Manipulation ---
         updatePhysicsOld(dt) {
-            // Drag
             this.speed *= gameParams.gtaDrag;
-
-            // Acceleration
             const accel = this.power * 0.002;
             if (this.throttleInput !== 0) {
-                // If handbrake is held, severely reduce acceleration power (engine revving but slipping)
                 const slip = this.handbrakeInput ? 0.3 : 1.0;
                 this.speed += this.throttleInput * accel * slip;
             }
 
-            // Steering Logic
             if (Math.abs(this.speed) > 0.1) {
                 const speedAbs = Math.abs(this.speed);
                 const authority = Math.min(1.0, speedAbs / 15.0);
                 const maxVelUnit = this.maxSpeed / 3.6;
                 const speedFraction = Math.min(1.0, speedAbs / maxVelUnit);
                 const dampening = 1.0 - (speedFraction * 0.5); 
-                
-                // Allow faster spinning if handbrake is on (turn around)
                 const handbrakeBonus = this.handbrakeInput ? 2.5 : 1.0;
 
                 const turn = this.steerInput * gameParams.gtaTurnFactor * authority * dampening * 0.006 * handbrakeBonus;
                 const dir = this.speed > 0 ? 1 : -1;
-                
                 this.body.setAngle(this.body.getAngle() - (turn * dir));
             }
 
-            // Calculate Forward Vector
             const angle = this.body.getAngle();
             const fx = -Math.sin(angle); 
             const fy = Math.cos(angle);
 
-            // Determine Target Velocity Vector
             const targetVx = fx * this.speed;
             const targetVy = fy * this.speed;
 
-            // Apply Grip / Drift
             let grip = gameParams.gtaGrip;
             if (this.handbrakeInput) {
-                grip *= gameParams.gtaHandbrakeGrip; // Slide more
-                // If sliding fast, leave marks
+                grip *= gameParams.gtaHandbrakeGrip; 
                 if (Math.abs(this.speed) > 10) this.spawnSkidMarks();
             }
 
@@ -417,117 +411,76 @@ document.addEventListener('DOMContentLoaded', () => {
             this.vy += (targetVy - this.vy) * grip;
 
             this.body.setLinearVelocity(pl.Vec2(this.vx, this.vy));
-            this.body.setAngularVelocity(this.body.getAngularVelocity() * 0.85); // High angular damping in old mode
+            this.body.setAngularVelocity(this.body.getAngularVelocity() * 0.85); 
 
-            // Speed Cap
             const max = this.maxSpeed / 3.6; 
             this.speed = clamp(this.speed, -max * 0.5, max);
         }
 
-        // --- NEW: Physics-Based Drift Model ---
         updatePhysicsNew(dt) {
             const body = this.body;
             const velocity = body.getLinearVelocity();
             const speed = velocity.length();
 
-            // 1. Get Orientation Vectors
             const angle = body.getAngle();
             const forwardNormal = pl.Vec2(-Math.sin(angle), Math.cos(angle));
             const rightNormal = pl.Vec2(Math.cos(angle), Math.sin(angle));
 
-            // 2. Kill Lateral Velocity (The "Tire Grip" impulse)
             const lateralVel = pl.Vec2.dot(rightNormal, velocity);
             const forwardVel = pl.Vec2.dot(forwardNormal, velocity);
             
-            // Grip factor: 1.0 = tracks perfectly, 0.0 = ice.
-            let grip = 0.95; // High default grip
-            
-            // Reduce grip if handbraking
-            if (this.handbrakeInput) {
-                grip = 0.05; // Drifting/Sliding
-            } 
-            // Also reduce grip if turning extremely hard at high speed (loss of traction)
-            else if (speed > 20 && Math.abs(lateralVel) > 10) {
-                 grip = 0.90; 
-            }
+            let grip = 0.95; 
+            if (this.handbrakeInput) grip = 0.05; 
+            else if (speed > 20 && Math.abs(lateralVel) > 10) grip = 0.90; 
 
             const impulse = rightNormal.clone().mul(-lateralVel * grip * body.getMass());
             body.applyLinearImpulse(impulse, body.getWorldCenter());
 
-            // 3. Angular Control (Steering)
-            // If handbraking AND moving significantly, allow car to spin freely.
-            // If stopped or normal driving, dampen rotation.
-            if (this.handbrakeInput && speed > 5.0) {
-                body.setAngularDamping(0.5); 
-            } else {
-                body.setAngularDamping(4.0);
-            }
+            if (this.handbrakeInput && speed > 5.0) body.setAngularDamping(0.5); 
+            else body.setAngularDamping(4.0);
 
-            // Apply steering torque / angular velocity
             if (Math.abs(this.steerInput) > 0.01) {
-                // Steer stronger if handbraking to whip the car around
                 let steerPower = this.handbrakeInput ? 6.0 : 3.0; 
-                
-                // --- FIX: Scale steering based on speed when handbraking ---
                 if (this.handbrakeInput) {
-                    // Map speed 0->10 to factor 0.0->1.0
                     const speedFactor = Math.min(1.0, speed / 10.0);
                     steerPower *= speedFactor;
                 }
                 
-                // Inverse steering direction for reverse?
                 let dir = 1;
-                if (forwardVel < -5) dir = -1; // Reverse steering
+                if (forwardVel < -5) dir = -1; 
                 
                 const currentAngVel = body.getAngularVelocity();
                 const targetAngVel = -this.steerInput * steerPower * dir;
-                
-                // Blend
                 const angDiff = targetAngVel - currentAngVel;
                 body.applyAngularImpulse(angDiff * body.getInertia() * 0.1); 
             }
 
-            // 4. Engine Power (Forward Impulse)
             if (Math.abs(this.throttleInput) > 0.01) {
                 let forceMagnitude = this.power * 0.5 * this.throttleInput;
-                // If handbrake is on, driving force is reduced (wheels spinning)
                 if (this.handbrakeInput) forceMagnitude *= 0.3;
-
                 const force = forwardNormal.clone().mul(forceMagnitude);
                 body.applyForce(force, body.getWorldCenter());
             }
 
-            // 5. Linear Drag (Air resistance + Rolling resistance)
-            // Add extra drag if moving sideways (scrubbing speed)
             const dragFactor = 0.02 + (Math.abs(lateralVel) * 0.05); 
-            // Extra drag on handbrake (brakes locked)
             const brakeDrag = this.handbrakeInput ? 0.05 : 0;
-            
             const dragForce = velocity.clone().mul(-(dragFactor + brakeDrag) * body.getMass());
             body.applyForce(dragForce, body.getWorldCenter());
 
-            // 6. Skid Marks Logic
-            // If there is significant lateral velocity (sliding), or handbrake is locked
             if ((Math.abs(lateralVel) > 4.0 && speed > 5) || (this.handbrakeInput && speed > 5)) {
                 this.spawnSkidMarks();
             }
 
-            // Update internal speed prop for AI logic consistency
-            this.speed = forwardVel * 3.6; // approx conversion
+            this.speed = forwardVel * 3.6; 
         }
 
         spawnSkidMarks() {
-            // Don't spawn every frame, maybe every 3rd frame or based on distance
             if (Math.random() > 0.4) return; 
-
             const pos = this.body.getPosition();
             const angle = this.body.getAngle();
             const right = { x: Math.cos(angle), y: Math.sin(angle) };
             const fwd = { x: -Math.sin(angle), y: Math.cos(angle) };
 
-            // Offset to rear tires. 
-            // Car is approx 3.8 long (center is 0). Back is ~ -1.5. 
-            // Width 1.8. Tires ~ +/- 0.6.
             const backOffset = -1.4;
             const widthOffset = 0.65;
 
@@ -541,7 +494,6 @@ document.addEventListener('DOMContentLoaded', () => {
             skidMarks.push(new SkidMark(rX, rY, angle));
         }
 
-        // --- UPDATED AI (Kept largely same, just inputs) ---
         aiUpdate(dt) {
             if (this.isPlayer) return;
 
@@ -553,11 +505,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const tileZ = Math.round(pos.y / BLOCK_SIZE) * BLOCK_SIZE;
             const tileKey = `${tileX},${tileZ}`;
             
-            // --- 1. CRASH RECOVERY ---
             if(physVel < 2.0) {
                 this.stuckTimer += dt;
                 if(this.stuckTimer > 0.5) {
-                    this.drive(-1, 1, false); // Reverse & Turn
+                    this.drive(-1, 1, false); 
                     return;
                 }
             } else {
@@ -565,13 +516,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (this.stuckTimer > 4.0 && currentMapType === 'default') this.markedForDeletion = true;
 
-            // --- 2. NAVIGATION ---
             if (currentMapType !== 'default' && pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ)) < 8.0 && this.lastDecisionTile !== tileKey) {
                 this.lastDecisionTile = tileKey;
                 this.makeTurnDecision(tileX, tileZ);
             }
 
-            // --- 3. STEERING ---
             const currentAngle = this.body.getAngle();
             const angleToTarget = angleDiff(this.aiTargetAngle, currentAngle);
             let steer = 0;
@@ -579,14 +528,13 @@ document.addEventListener('DOMContentLoaded', () => {
             let brake = false;
 
             if (Math.abs(angleToTarget) > 0.1) {
-                steer = angleToTarget > 0 ? -1 : 1; // Inverted steering model from input
-                throttle = 0.5; // Slow down
+                steer = angleToTarget > 0 ? -1 : 1; 
+                throttle = 0.5; 
             } else {
-                steer = angleToTarget * -2.0; // P-controller
+                steer = angleToTarget * -2.0; 
                 throttle = 1.0;
             }
 
-            // Speed Limit
             const maxVel = this.maxSpeed / 3.6;
             if (physVel > maxVel) throttle = 0;
 
@@ -629,11 +577,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const angle = this.body.getAngle();
             const fwd = { x: -Math.sin(angle), y: Math.cos(angle) };
             const right = { x: Math.cos(angle), y: Math.sin(angle) };
-            const carVel = this.body.getLinearVelocity(); // Inherit car's current velocity
+            const carVel = this.body.getLinearVelocity(); 
             
             const gunOffset = 0.6; 
             const spawnDist = 3.0; 
-            const speed = 60; // Relative speed added to car speed
+            const speed = 60; 
             
             const totalVx = carVel.x + (fwd.x * speed);
             const totalVy = carVel.y + (fwd.y * speed);
@@ -694,7 +642,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const chunk = { zStart: zStart, meshes: [], bodies: [], roadData: [] };
         const matType = gameParams.simpleMaterials ? THREE.MeshLambertMaterial : THREE.MeshStandardMaterial;
 
-        // Ground
         const planeGeo = new THREE.PlaneGeometry(400, CHUNK_LENGTH);
         const roadTex = createProceduralTexture('road');
         roadTex.repeat.set(40, CHUNK_LENGTH/10);
@@ -740,7 +687,6 @@ document.addEventListener('DOMContentLoaded', () => {
             addBuilding(-35, z); addBuilding(35, z);
         }
 
-        // AI Nodes
         for(let z = zStart; z < zStart + CHUNK_LENGTH; z += 20) {
             const t1={x: -15, z: z}, t2={x: 0, z: z}, t3={x: 15, z: z};
             roadTiles.push(t1, t2, t3);
@@ -761,20 +707,35 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateHighway() {
-        if (currentMapType !== 'default' || !player1) return;
-        const pZ = player1.body.getPosition().y; 
-        const currentChunkIdx = Math.floor(pZ / CHUNK_LENGTH);
-        [-1, 0, 1].forEach(offset => {
-            const targetIdx = currentChunkIdx + offset;
-            const targetZ = targetIdx * CHUNK_LENGTH;
-            const exists = highwayChunks.some(c => Math.abs(c.zStart - targetZ) < 1);
-            if (!exists) createHighwayChunk(targetZ);
+        if (currentMapType !== 'default') return;
+        let players = [];
+        if (player1) players.push(player1);
+        if (player2) players.push(player2);
+        if (players.length === 0) return;
+
+        players.forEach(p => {
+            const pZ = p.body.getPosition().y; 
+            const currentChunkIdx = Math.floor(pZ / CHUNK_LENGTH);
+            [-1, 0, 1].forEach(offset => {
+                const targetIdx = currentChunkIdx + offset;
+                const targetZ = targetIdx * CHUNK_LENGTH;
+                const exists = highwayChunks.some(c => Math.abs(c.zStart - targetZ) < 1);
+                if (!exists) createHighwayChunk(targetZ);
+            });
         });
 
         for (let i = highwayChunks.length - 1; i >= 0; i--) {
             const chunk = highwayChunks[i];
             const chunkIdx = Math.round(chunk.zStart / CHUNK_LENGTH);
-            if (Math.abs(chunkIdx - currentChunkIdx) > 2) {
+            
+            let farFromAll = true;
+            players.forEach(p => {
+                const pZ = p.body.getPosition().y;
+                const pChunkIdx = Math.floor(pZ / CHUNK_LENGTH);
+                if (Math.abs(chunkIdx - pChunkIdx) <= 2) farFromAll = false;
+            });
+
+            if (farFromAll) {
                 chunk.meshes.forEach(m => { 
                     scene.remove(m); 
                     if(m.geometry) m.geometry.dispose();
@@ -819,14 +780,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function spawnTraffic() {
-        if (loadedTextures.length === 0 || !player1) return;
-        const pPos = player1.body.getPosition();
-        const pAngle = player1.body.getAngle();
+        if (loadedTextures.length === 0) return;
+        let players = [];
+        if (player1) players.push(player1);
+        if (player2) players.push(player2);
+        if (players.length === 0) return;
+
+        let p = players[Math.floor(Math.random() * players.length)];
+        const pPos = p.body.getPosition();
+        const pAngle = p.body.getAngle();
         const pDir = pl.Vec2(-Math.sin(pAngle), Math.cos(pAngle));
         const spawnRadius = gameParams.spawnRadius;
 
         for(let i = trafficPool.length - 1; i >= 0; i--) {
-            if (pl.Vec2.distance(trafficPool[i].body.getPosition(), pPos) > spawnRadius) {
+            let cPos = trafficPool[i].body.getPosition();
+            let dist1 = player1 ? pl.Vec2.distance(cPos, player1.body.getPosition()) : Infinity;
+            let dist2 = player2 ? pl.Vec2.distance(cPos, player2.body.getPosition()) : Infinity;
+            
+            if (Math.min(dist1, dist2) > spawnRadius) {
                 trafficPool[i].markedForDeletion = true; 
             }
         }
@@ -870,11 +841,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const entB = entities.find(e => e.body === b);
         if(!entA || !entB) return;
 
-        // Bounce Logic
         if (entA instanceof Car || entB instanceof Car) {
             const car = entA instanceof Car ? entA : entB;
-            car.speed *= 0.3; // Old physics speed prop
-            // New physics naturally handles bounce via restitution
+            car.speed *= 0.3; 
         }
 
         if(entA.isBullet || entB.isBullet) {
@@ -883,9 +852,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if(target instanceof Car && !target.isPlayer) {
                 bullet.markedForDeletion = true;
                 target.markedForDeletion = true; 
-                if(bullet.owner === 1) p1Score += 100; else p2Score += 100;
+                if(bullet.owner === 1) { p1Score += 100; p1ScoreEl.innerText = `P1: ${p1Score}`; }
+                else { p2Score += 100; p2ScoreEl.innerText = `P2: ${p2Score}`; }
                 createExplosion(target.mesh.position);
-                p1ScoreEl.innerText = `P1: ${p1Score}`; p2ScoreEl.innerText = `P2: ${p2Score}`;
             } else if (!target.isPlayer) {
                 bullet.markedForDeletion = true; 
             }
@@ -893,8 +862,103 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     const keys = {};
-    window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
-    window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+    window.addEventListener('keydown', (e) => keys[e.code] = true);
+    window.addEventListener('keyup', (e) => keys[e.code] = false);
+
+    // --- Device Assignment Logic ---
+    window.setGameMode = function(mode) {
+        gameMode = mode;
+        document.getElementById('btnMode1P').classList.toggle('active', mode === '1p');
+        document.getElementById('btnMode2PV').classList.toggle('active', mode === '2pv');
+        document.getElementById('btnMode2PH').classList.toggle('active', mode === '2ph');
+        numPlayers = mode === '1p' ? 1 : 2;
+        document.getElementById('p2DeviceSlot').style.display = numPlayers === 2 ? 'block' : 'none';
+    };
+
+    window.clearDevices = function() {
+        devices = { p1: null, p2: null };
+        document.getElementById('p1DeviceSlot').innerText = "P1: Waiting...";
+        document.getElementById('p1DeviceSlot').classList.remove('ready');
+        document.getElementById('p2DeviceSlot').innerText = "P2: Waiting...";
+        document.getElementById('p2DeviceSlot').classList.remove('ready');
+    };
+
+    function getDeviceName(dev) {
+        if (dev === 'kb_arrows') return "Keyboard (Arrows)";
+        if (dev === 'kb_wasd') return "Keyboard (WASD)";
+        if (dev && dev.startsWith('gp_')) return "Gamepad " + (parseInt(dev.split('_')[1]) + 1);
+        return "Waiting...";
+    }
+
+    function assignDevice(dev) {
+        if (devices.p1 === dev || devices.p2 === dev) return;
+        if (!devices.p1) {
+            devices.p1 = dev;
+            document.getElementById('p1DeviceSlot').innerText = "P1: " + getDeviceName(dev);
+            document.getElementById('p1DeviceSlot').classList.add('ready');
+        } else if (!devices.p2 && numPlayers === 2) {
+            devices.p2 = dev;
+            document.getElementById('p2DeviceSlot').innerText = "P2: " + getDeviceName(dev);
+            document.getElementById('p2DeviceSlot').classList.add('ready');
+        }
+    }
+
+    function checkDeviceJoins() {
+        if (keys['ArrowUp'] || keys['ArrowDown'] || keys['ArrowLeft'] || keys['ArrowRight']) assignDevice('kb_arrows');
+        if (keys['KeyW'] || keys['KeyA'] || keys['KeyS'] || keys['KeyD']) assignDevice('kb_wasd');
+
+        const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+        for (let i = 0; i < gamepads.length; i++) {
+            const gp = gamepads[i];
+            if (gp) {
+                let pressed = gp.buttons.some(b => b.pressed) || gp.axes.some(a => Math.abs(a) > 0.5);
+                if (pressed) assignDevice('gp_' + gp.index);
+            }
+        }
+    }
+
+    window.addEventListener("gamepaddisconnected", (e) => {
+        const id = 'gp_' + e.gamepad.index;
+        if (devices.p1 === id) { devices.p1 = null; document.getElementById('p1DeviceSlot').innerText = "P1: Waiting..."; document.getElementById('p1DeviceSlot').classList.remove('ready'); }
+        if (devices.p2 === id) { devices.p2 = null; document.getElementById('p2DeviceSlot').innerText = "P2: Waiting..."; document.getElementById('p2DeviceSlot').classList.remove('ready'); }
+    });
+
+    function getPlayerInput(playerIndex) {
+        let dev = playerIndex === 1 ? devices.p1 : devices.p2;
+        let input = { throttle: 0, steer: 0, shoot: false, handbrake: false };
+        if (!dev) return input;
+
+        if (dev === 'kb_arrows') {
+            if (keys['ArrowUp']) input.throttle = 1;
+            if (keys['ArrowDown']) input.throttle = -1;
+            if (keys['ArrowLeft']) input.steer = 1;
+            if (keys['ArrowRight']) input.steer = -1;
+            if (keys['Enter'] || keys['ControlRight']) input.shoot = true;
+            if (keys['ShiftRight'] || keys['Space']) input.handbrake = true;
+        } else if (dev === 'kb_wasd') {
+            if (keys['KeyW']) input.throttle = 1;
+            if (keys['KeyS']) input.throttle = -1;
+            if (keys['KeyA']) input.steer = 1;
+            if (keys['KeyD']) input.steer = -1;
+            if (keys['KeyF'] || keys['ControlLeft']) input.shoot = true;
+            if (keys['Space'] || keys['ShiftLeft']) input.handbrake = true;
+        } else if (dev.startsWith('gp_')) {
+            let gpIndex = parseInt(dev.split('_')[1]);
+            let gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+            let gp = gamepads[gpIndex];
+            if (gp) {
+                if (Math.abs(gp.axes[0]) > 0.2) input.steer = -gp.axes[0]; 
+                if (gp.buttons[14]?.pressed) input.steer = 1;
+                if (gp.buttons[15]?.pressed) input.steer = -1;
+
+                if (gp.buttons[0]?.pressed) input.throttle = 1;
+                if (gp.buttons[6]?.pressed) input.throttle = -1;
+                if (gp.buttons[7]?.pressed) input.shoot = true;
+                if (gp.buttons[1]?.pressed || gp.buttons[2]?.pressed) input.handbrake = true;
+            }
+        }
+        return input;
+    }
 
     let lastTime = 0;
     function animate(time) {
@@ -902,15 +966,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const dt = Math.min((time - lastTime) / 1000, 0.05);
         lastTime = time;
 
-        // --- Gamepad Assignment (Moved above gameActive check so players can join in start menu) ---
-        const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-        for (let i = 0; i < gamepads.length; i++) {
-            const gp = gamepads[i];
-            if (gp && gp.buttons.some((b, idx) => idx < 4 && b.pressed)) {
-                if (gamepadAssignments.p1 === null && gamepadAssignments.p2 !== gp.index) gamepadAssignments.p1 = gp.index;
-                else if (gamepadAssignments.p2 === null && gamepadAssignments.p1 !== gp.index) gamepadAssignments.p2 = gp.index;
-            }
-        }
+        checkDeviceJoins();
 
         if (!gameActive || isPaused) return;
 
@@ -918,7 +974,6 @@ document.addEventListener('DOMContentLoaded', () => {
         updateHighway();
         world.step(TIME_STEP, velIter, posIter);
 
-        // --- SKID MARKS UPDATE ---
         for (let i = skidMarks.length - 1; i >= 0; i--) {
             if (!skidMarks[i].update(dt)) {
                 skidMarks[i].destroy();
@@ -927,61 +982,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (player1) {
-            let throttle = 0, steer = 0, shoot = false, handbrake = false;
-            if (keys['arrowup']) throttle = 1; if (keys['arrowdown']) throttle = -1;
-            if (keys['arrowleft']) steer = 1; if (keys['arrowright']) steer = -1; 
-            if (keys['control']) shoot = true; 
-            if (keys[' '] || keys['shift']) handbrake = true;
-
-            if (gamepadAssignments.p1 !== null && gamepads[gamepadAssignments.p1]) {
-                const gp = gamepads[gamepadAssignments.p1];
-                
-                // Left Stick and D-Pad for steering
-                if (Math.abs(gp.axes[0]) > 0.2) steer = -gp.axes[0]; 
-                if (gp.buttons[14]?.pressed) steer = 1;  // D-Pad Left
-                if (gp.buttons[15]?.pressed) steer = -1; // D-Pad Right
-
-                // A (0) for Acceleration, Left Trigger (6) for Brake/Reverse
-                if (gp.buttons[0]?.pressed) throttle = 1;
-                if (gp.buttons[6]?.pressed) throttle = -1;
-                
-                // Right Trigger (7) for Shoot
-                if (gp.buttons[7]?.pressed) shoot = true;
-
-                // X (2) or B (1) for Handbrake
-                if (gp.buttons[1]?.pressed || gp.buttons[2]?.pressed) handbrake = true;
-            }
-            player1.drive(throttle, steer, handbrake);
-            if (shoot) player1.shoot();
+            let i = getPlayerInput(1);
+            player1.drive(i.throttle, i.steer, i.handbrake);
+            if (i.shoot) player1.shoot();
         }
 
         if (player2) {
-            let throttle = 0, steer = 0, shoot = false, handbrake = false;
-            if (keys['w']) throttle = 1; if (keys['s']) throttle = -1;
-            if (keys['a']) steer = 1; if (keys['d']) steer = -1; 
-            if (keys['f']) shoot = true;
-            if (keys[' ']) handbrake = true; 
-            
-            if (gamepadAssignments.p2 !== null && gamepads[gamepadAssignments.p2]) {
-                const gp = gamepads[gamepadAssignments.p2];
-                
-                // Left Stick and D-Pad for steering
-                if (Math.abs(gp.axes[0]) > 0.2) steer = -gp.axes[0]; 
-                if (gp.buttons[14]?.pressed) steer = 1;  // D-Pad Left
-                if (gp.buttons[15]?.pressed) steer = -1; // D-Pad Right
-
-                // A (0) for Acceleration, Left Trigger (6) for Brake/Reverse
-                if (gp.buttons[0]?.pressed) throttle = 1;
-                if (gp.buttons[6]?.pressed) throttle = -1;
-                
-                // Right Trigger (7) for Shoot
-                if (gp.buttons[7]?.pressed) shoot = true;
-
-                // X (2) or B (1) for Handbrake
-                if (gp.buttons[1]?.pressed || gp.buttons[2]?.pressed) handbrake = true;
-            }
-            player2.drive(throttle, steer, handbrake);
-            if (shoot) player2.shoot();
+            let i = getPlayerInput(2);
+            player2.drive(i.throttle, i.steer, i.handbrake);
+            if (i.shoot) player2.shoot();
         }
 
         trafficPool.forEach(car => {
@@ -991,7 +1000,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // Entity Cleanup
         for (let i = entities.length - 1; i >= 0; i--) {
              if (entities[i] === player1 || entities[i] === player2) {
                  entities[i].update(dt);
@@ -1006,37 +1014,83 @@ document.addEventListener('DOMContentLoaded', () => {
              }
         }
 
-        // Camera
-        if (player1 && player1.mesh) {
-            if(camera.fov !== gameParams.cameraFOV) { camera.fov = gameParams.cameraFOV; camera.updateProjectionMatrix(); }
-            const targetX = player1.mesh.position.x;
+        // --- Rendering & Split Screen Cameras ---
+        const updateCam = (cam, p) => {
+            if (!p || !p.mesh) return;
+            if(cam.fov !== gameParams.cameraFOV) { cam.fov = gameParams.cameraFOV; cam.updateProjectionMatrix(); }
+            const targetX = p.mesh.position.x;
             const distH = gameParams.topDownMode ? 0.1 : 20; 
-            let finalCamX = targetX, finalCamZ = player1.mesh.position.z + distH;
+            let finalCamX = targetX, finalCamZ = p.mesh.position.z + distH;
             
             if (gameParams.cameraRotate) {
-                 const angle = player1.body.getAngle(); 
+                 const angle = p.body.getAngle(); 
                  finalCamX = targetX + (-Math.sin(angle) * distH);
-                 finalCamZ = player1.mesh.position.z + (Math.cos(angle) * distH);
-                 if(gameParams.topDownMode) camera.up.set(Math.sin(angle), 0, Math.cos(angle));
-                 else camera.up.set(0,1,0);
+                 finalCamZ = p.mesh.position.z + (Math.cos(angle) * distH);
+                 if(gameParams.topDownMode) cam.up.set(Math.sin(angle), 0, Math.cos(angle));
+                 else cam.up.set(0,1,0);
             } else {
-                 if(gameParams.topDownMode) camera.up.set(0,0,-1);
-                 else camera.up.set(0,1,0);
+                 if(gameParams.topDownMode) cam.up.set(0,0,-1);
+                 else cam.up.set(0,1,0);
             }
-            camera.position.x += (finalCamX - camera.position.x) * 0.1;
-            camera.position.z += (finalCamZ - camera.position.z) * 0.1;
-            camera.position.y += (gameParams.cameraHeight - camera.position.y) * 0.1;
-            camera.lookAt(targetX, 0, player1.mesh.position.z);
-            
+            cam.position.x += (finalCamX - cam.position.x) * 0.1;
+            cam.position.z += (finalCamZ - cam.position.z) * 0.1;
+            cam.position.y += (gameParams.cameraHeight - cam.position.y) * 0.1;
+            cam.lookAt(targetX, 0, p.mesh.position.z);
+        };
+
+        if (player1) updateCam(camera1, player1);
+        if (player2) updateCam(camera2, player2);
+
+        if (player1 && player1.mesh) {
             dirLight.position.x = player1.mesh.position.x + 50;
             dirLight.position.z = player1.mesh.position.z + 50;
             dirLight.target.position.set(player1.mesh.position.x, 0, player1.mesh.position.z);
             dirLight.target.updateMatrixWorld();
         }
-        renderer.render(scene, camera);
+
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+
+        if (numPlayers === 1) {
+            camera1.aspect = w / h; camera1.updateProjectionMatrix();
+            renderer.setViewport(0, 0, w, h);
+            renderer.setScissor(0, 0, w, h);
+            renderer.setScissorTest(false);
+            renderer.render(scene, camera1);
+        } else {
+            renderer.setScissorTest(true);
+            if (gameMode === '2ph') { // Horizontal Split
+                camera1.aspect = w / (h / 2); camera1.updateProjectionMatrix();
+                camera2.aspect = w / (h / 2); camera2.updateProjectionMatrix();
+                
+                // P1 Top
+                renderer.setViewport(0, Math.floor(h/2) + 1, w, Math.floor(h/2));
+                renderer.setScissor(0, Math.floor(h/2) + 1, w, Math.floor(h/2));
+                renderer.render(scene, camera1);
+
+                // P2 Bottom
+                renderer.setViewport(0, 0, w, Math.floor(h/2) - 1);
+                renderer.setScissor(0, 0, w, Math.floor(h/2) - 1);
+                renderer.render(scene, camera2);
+            } else { // Vertical Split
+                camera1.aspect = (w / 2) / h; camera1.updateProjectionMatrix();
+                camera2.aspect = (w / 2) / h; camera2.updateProjectionMatrix();
+
+                // P1 Left
+                renderer.setViewport(0, 0, Math.floor(w/2) - 1, h);
+                renderer.setScissor(0, 0, Math.floor(w/2) - 1, h);
+                renderer.render(scene, camera1);
+
+                // P2 Right
+                renderer.setViewport(Math.floor(w/2) + 1, 0, Math.floor(w/2), h);
+                renderer.setScissor(Math.floor(w/2) + 1, 0, Math.floor(w/2), h);
+                renderer.render(scene, camera2);
+            }
+        }
     }
 
-    // --- Start ---
+    requestAnimationFrame(animate);
+
     window.startGameWithMap = function(type) {
         currentMapType = type;
         document.getElementById('startScreen').classList.add('hidden');
@@ -1100,9 +1154,17 @@ document.addEventListener('DOMContentLoaded', () => {
                  sx = s.x; sz = s.z;
             }
             player1 = new Car(sx, sz, true, 1, loadedTextures[0]);
-            player2 = new Car(sx - 10, sz, true, 2, loadedTextures[1]);
-            entities.push(player1); entities.push(player2);
-            gameActive = true; animate(0);
+            entities.push(player1); 
+            
+            if (numPlayers === 2) {
+                player2 = new Car(sx - 10, sz, true, 2, loadedTextures[1]);
+                entities.push(player2);
+                document.getElementById('p2Score').style.display = 'block';
+            } else {
+                player2 = null;
+                document.getElementById('p2Score').style.display = 'none';
+            }
+            gameActive = true;
         });
     };
 
@@ -1124,7 +1186,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('newGameButton').onclick = () => location.reload();
     document.getElementById('restartCurrentButton').onclick = () => window.startGameWithMap(currentMapType);
     
-    // Physics Toggles
     const btnOld = document.getElementById('physOldBtn');
     const btnNew = document.getElementById('physNewBtn');
     const txtInfo = document.getElementById('physInfoText');
@@ -1142,9 +1203,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.addEventListener('keydown', (e) => {
         if (e.repeat) return;
-        if (e.key.toLowerCase() === 'c') toggleMenu(customizeMenu);
-        if (e.key.toLowerCase() === 'h') toggleMenu(helpMenu);
-        if (e.key.toLowerCase() === 'o') toggleMenu(optionsMenu);
+        if (e.code === 'KeyC') toggleMenu(customizeMenu);
+        if (e.code === 'KeyH') toggleMenu(helpMenu);
+        if (e.code === 'KeyO') toggleMenu(optionsMenu);
     });
 
     document.getElementById('shadowsToggle').onchange = (e) => {

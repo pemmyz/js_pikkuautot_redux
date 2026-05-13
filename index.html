@@ -20,22 +20,31 @@
             <h3>CITY EDITION</h3>
             
             <div class="section">
-                <p>Classic Mode</p>
+                <p>Game Mode</p>
                 <div class="button-group">
-                    <button onclick="startGameWithMap('default')">Infinite Highway</button>
+                    <button id="btnMode1P" class="toggle-btn active" onclick="setGameMode('1p')">1 Player</button>
+                    <button id="btnMode2PH" class="toggle-btn" onclick="setGameMode('2ph')">2P (Split Horz)</button>
+                    <button id="btnMode2PV" class="toggle-btn" onclick="setGameMode('2pv')">2P (Split Vert)</button>
                 </div>
             </div>
 
+            <div class="section" id="lobbySection">
+                <p>Device Setup (Press Input to Join) <button onclick="clearDevices()" style="font-size:0.7em; padding:3px;">Reset Inputs</button></p>
+                <div id="p1DeviceSlot" class="device-slot">P1: Waiting...</div>
+                <div id="p2DeviceSlot" class="device-slot" style="display:none;">P2: Waiting...</div>
+            </div>
+            
             <div class="section">
-                <p>Generated Cities</p>
+                <p>Start Map</p>
                 <div class="button-group">
-                    <button onclick="startGameWithMap('small')">Small</button>
+                    <button onclick="startGameWithMap('default')">Highway</button>
+                    <button onclick="startGameWithMap('small')">Small City</button>
                     <button onclick="startGameWithMap('medium')">Metropolis</button>
                     <button onclick="startGameWithMap('large')">Megacity</button>
                 </div>
             </div>
             
-            <p class="small-text">Controls: Arrows/WASD to Drive, Space/Shift to Drift</p>
+            <p class="small-text">Controls: Arrows/WASD, A/RT/LT/X on Gamepad</p>
         </div>
 
         <!-- HEADER -->
@@ -55,7 +64,7 @@
             Press <b>O</b> for Options
         </div>
 
-        <!-- OPTIONS MENU (New) -->
+        <!-- OPTIONS MENU -->
         <div id="optionsMenu" class="menu-overlay hidden">
             <h2>Game Options</h2>
             <div class="setting-group">
@@ -79,12 +88,10 @@
         <!-- HELP MENU -->
         <div id="helpMenu" class="menu-overlay hidden">
             <h2>Controls</h2>
-            <p><b>P1:</b> Arrows (Move), R-Ctrl (Shoot)</p>
-            <p><b>P2:</b> WASD (Move), F (Shoot)</p>
-            <p><b>Drift/Brake:</b> Space or Shift</p>
+            <p><b>Keyboard:</b> Arrows or WASD (Move), Space/Shift (Handbrake), Ctrl/F (Shoot)</p>
+            <p><b>Gamepad:</b> L-Stick/D-Pad (Steer), A (Gas), LT (Brake/Rev), X/B (Handbrake), RT (Shoot)</p>
             <hr>
-            <p><b>Gamepad:</b> Press A/B/X/Y to Join!</p>
-            <p><b>Goal:</b> Drive North. Avoid Traffic.</p>
+            <p><b>Goal:</b> Drive, Shoot, Survive.</p>
             <div class="about-info">
                 <p>GTA 1 Style remake with Three.js & Planck.js</p>
             </div>
@@ -189,7 +196,7 @@
         <!-- HUD -->
         <div id="hud" class="hidden">
             <div id="p1Score">P1 Score: 0</div>
-            <div id="p2Score">P2 Score: 0</div>
+            <div id="p2Score" style="display:none;">P2 Score: 0</div>
         </div>
     </div>
 </body>
