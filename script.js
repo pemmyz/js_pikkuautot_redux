@@ -898,6 +898,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const dt = Math.min((time - lastTime) / 1000, 0.05);
         lastTime = time;
 
+        // --- Gamepad Assignment (Moved above gameActive check so players can join in start menu) ---
+        const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+        for (let i = 0; i < gamepads.length; i++) {
+            const gp = gamepads[i];
+            if (gp && gp.buttons.some((b, idx) => idx < 4 && b.pressed)) {
+                if (gamepadAssignments.p1 === null && gamepadAssignments.p2 !== gp.index) gamepadAssignments.p1 = gp.index;
+                else if (gamepadAssignments.p2 === null && gamepadAssignments.p1 !== gp.index) gamepadAssignments.p2 = gp.index;
+            }
+        }
+
         if (!gameActive || isPaused) return;
 
         if (Math.random() < 0.1) spawnTraffic();
@@ -912,15 +922,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-        for (let i = 0; i < gamepads.length; i++) {
-            const gp = gamepads[i];
-            if (gp && gp.buttons.some((b, idx) => idx < 4 && b.pressed)) {
-                if (gamepadAssignments.p1 === null && gamepadAssignments.p2 !== gp.index) gamepadAssignments.p1 = gp.index;
-                else if (gamepadAssignments.p2 === null && gamepadAssignments.p1 !== gp.index) gamepadAssignments.p2 = gp.index;
-            }
-        }
-
         if (player1) {
             let throttle = 0, steer = 0, shoot = false, handbrake = false;
             if (keys['arrowup']) throttle = 1; if (keys['arrowdown']) throttle = -1;
@@ -930,11 +931,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (gamepadAssignments.p1 !== null && gamepads[gamepadAssignments.p1]) {
                 const gp = gamepads[gamepadAssignments.p1];
+                
+                // Left Stick and D-Pad for steering
                 if (Math.abs(gp.axes[0]) > 0.2) steer = -gp.axes[0]; 
-                if (gp.buttons[0]?.pressed || gp.buttons[12]?.pressed) throttle = 1;
-                if (gp.buttons[13]?.pressed || gp.axes[1] > 0.5) throttle = -1;
-                if (gp.buttons[1]?.pressed || gp.buttons[2]?.pressed) shoot = true;
-                if (gp.buttons[4]?.pressed || gp.buttons[5]?.pressed) handbrake = true;
+                if (gp.buttons[14]?.pressed) steer = 1;  // D-Pad Left
+                if (gp.buttons[15]?.pressed) steer = -1; // D-Pad Right
+
+                // A (0) for Acceleration, Left Trigger (6) for Brake/Reverse
+                if (gp.buttons[0]?.pressed) throttle = 1;
+                if (gp.buttons[6]?.pressed) throttle = -1;
+                
+                // Right Trigger (7) for Shoot
+                if (gp.buttons[7]?.pressed) shoot = true;
+
+                // X (2) or B (1) for Handbrake
+                if (gp.buttons[1]?.pressed || gp.buttons[2]?.pressed) handbrake = true;
             }
             player1.drive(throttle, steer, handbrake);
             if (shoot) player1.shoot();
@@ -949,9 +960,21 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (gamepadAssignments.p2 !== null && gamepads[gamepadAssignments.p2]) {
                 const gp = gamepads[gamepadAssignments.p2];
+                
+                // Left Stick and D-Pad for steering
                 if (Math.abs(gp.axes[0]) > 0.2) steer = -gp.axes[0]; 
+                if (gp.buttons[14]?.pressed) steer = 1;  // D-Pad Left
+                if (gp.buttons[15]?.pressed) steer = -1; // D-Pad Right
+
+                // A (0) for Acceleration, Left Trigger (6) for Brake/Reverse
                 if (gp.buttons[0]?.pressed) throttle = 1;
-                if (gp.buttons[1]?.pressed) shoot = true;
+                if (gp.buttons[6]?.pressed) throttle = -1;
+                
+                // Right Trigger (7) for Shoot
+                if (gp.buttons[7]?.pressed) shoot = true;
+
+                // X (2) or B (1) for Handbrake
+                if (gp.buttons[1]?.pressed || gp.buttons[2]?.pressed) handbrake = true;
             }
             player2.drive(throttle, steer, handbrake);
             if (shoot) player2.shoot();
