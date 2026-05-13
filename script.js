@@ -629,13 +629,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const angle = this.body.getAngle();
             const fwd = { x: -Math.sin(angle), y: Math.cos(angle) };
             const right = { x: Math.cos(angle), y: Math.sin(angle) };
+            const carVel = this.body.getLinearVelocity(); // Inherit car's current velocity
             
             const gunOffset = 0.6; 
             const spawnDist = 3.0; 
-            const speed = 60;
+            const speed = 60; // Relative speed added to car speed
             
-            createBullet(pos.x + fwd.x*spawnDist - right.x*gunOffset, pos.y + fwd.y*spawnDist - right.y*gunOffset, fwd.x*speed, fwd.y*speed, this.playerIndex);
-            createBullet(pos.x + fwd.x*spawnDist + right.x*gunOffset, pos.y + fwd.y*spawnDist + right.y*gunOffset, fwd.x*speed, fwd.y*speed, this.playerIndex);
+            const totalVx = carVel.x + (fwd.x * speed);
+            const totalVy = carVel.y + (fwd.y * speed);
+            
+            createBullet(pos.x + fwd.x*spawnDist - right.x*gunOffset, pos.y + fwd.y*spawnDist - right.y*gunOffset, totalVx, totalVy, this.playerIndex);
+            createBullet(pos.x + fwd.x*spawnDist + right.x*gunOffset, pos.y + fwd.y*spawnDist + right.y*gunOffset, totalVx, totalVy, this.playerIndex);
             this.shootCooldown = 0.2;
         }
     }
