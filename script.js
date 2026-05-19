@@ -1,3 +1,4 @@
+
 document.addEventListener('DOMContentLoaded', () => {
     // --- Configuration Constants ---
     const ASSET_FOLDER = 'auto/';
@@ -130,10 +131,128 @@ document.addEventListener('DOMContentLoaded', () => {
     const CAT_BULLET = 0x0004;
     const CAT_WALL = 0x0008;
 
+    // --- Blinking Windows Sub-System ---
+    const animatedBuildings = [];
+
+    class AnimatedBuildingTexture {
+        constructor() {
+            this.canvas = document.createElement('canvas');
+            this.canvas.width = 128;
+            this.canvas.height = 128;
+            this.ctx = this.canvas.getContext('2d');
+            
+            // Grid sizing mapped to the procedural 128x128 texture
+            this.cols = 6; 
+            this.rows = 4;
+            this.windowSizeW = 12;
+            this.windowSizeH = 18;
+            
+            // Initialize Window States (Random ON/OFF at start)
+            this.windowStates = [];
+            for (let r = 0; r < this.rows; r++) {
+                const row = [];
+                for (let c = 0; c < this.cols; c++) {
+                    row.push(Math.random() < 0.5); // 50% chance
+                }
+                this.windowStates.push(row);
+            }
+            
+            // Base Texture Object
+            this.texture = new THREE.CanvasTexture(this.canvas);
+            this.texture.wrapS = THREE.RepeatWrapping;
+            this.texture.wrapT = THREE.RepeatWrapping;
+            this.texture.magFilter = THREE.NearestFilter;
+            this.texture.minFilter = THREE.LinearFilter;
+            this.texture.colorSpace = THREE.SRGBColorSpace;
+            
+            // Array to keep track of building mesh clones sharing this canvas
+            this.textureInstances = []; 
+            this.draw();
+        }
+
+        draw() {
+            const ctx = this.ctx;
+            // Draw main building body
+            ctx.fillStyle = '#999999';
+            ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+            // Draw windows based on boolean state
+            for (let r = 0; r < this.rows; r++) {
+                for (let c = 0; c < this.cols; c++) {
+                    const isLightOn = this.windowStates[r][c];
+                    ctx.fillStyle = isLightOn ? '#ffffaa' : '#333333';
+                    
+                    const windowX = 10 + (c * 20);
+                    const windowY = 10 + (r * 32);
+                    
+                    ctx.fillRect(windowX, windowY, this.windowSizeW, this.windowSizeH);
+                }
+            }
+            
+            // Flag base texture and all cloned instances for WebGL re-upload
+            this.texture.needsUpdate = true;
+            this.textureInstances.forEach(t => t.needsUpdate = true);
+        }
+    }
+
+    class LightManager {
+        constructor() {
+            this.nextBlinkTime = performance.now() + 500; 
+        }
+
+        update() {
+            if (animatedBuildings.length === 0) return;
+            const currentTime = performance.now();
+
+            // Check if it's time to blink some windows
+            if (currentTime >= this.nextBlinkTime) {
+                const numWindowsToToggle = Math.floor(Math.random() * 7) + 2; 
+
+                for (let i = 0; i < numWindowsToToggle; i++) {
+                    const bldgIndex = Math.floor(Math.random() * animatedBuildings.length);
+                    const building = animatedBuildings[bldgIndex];
+
+                    const r = Math.floor(Math.random() * building.rows);
+                    const c = Math.floor(Math.random() * building.cols);
+
+                    // Toggle the state and redraw
+                    if (building.windowStates[r] !== undefined && building.windowStates[r][c] !== undefined) {
+                        building.windowStates[r][c] = !building.windowStates[r][c];
+                        building.draw(); 
+                    }
+                }
+
+                const delayInMilliseconds = (Math.random() * 0.5 + 0.25) * 1000;
+                this.nextBlinkTime = currentTime + delayInMilliseconds;
+                
+                // Cleanup disposed cloned instances to prevent memory leaks in the endless map
+                animatedBuildings.forEach(b => {
+                    b.textureInstances = b.textureInstances.filter(t => !t.isDisposed);
+                });
+            }
+        }
+    }
+
+    const lightManager = new LightManager();
+
     // --- Asset Loading & Procedural Textures ---
     const textureLoader = new THREE.TextureLoader();
     
     function createProceduralTexture(type) {
+        // Return pooled animated building textures
+        if (type === 'building') {
+            if (animatedBuildings.length === 0) {
+                // Generate a pool of 15 unique building textures to share across the city
+                for (let i = 0; i < 15; i++) {
+                    animatedBuildings.push(new AnimatedBuildingTexture());
+                }
+            }
+            const bldg = animatedBuildings[Math.floor(Math.random() * animatedBuildings.length)];
+            const clonedTex = bldg.texture.clone(); // Clone to allow independent UV mapping repeats
+            bldg.textureInstances.push(clonedTex);
+            return clonedTex;
+        }
+
         const canvas = document.createElement('canvas');
         canvas.width = 128;
         canvas.height = 128;
@@ -148,15 +267,6 @@ document.addEventListener('DOMContentLoaded', () => {
             ctx.fillStyle = '#eeeeee'; 
             ctx.fillRect(62, 0, 4, 128); 
             ctx.fillRect(0, 62, 128, 4); 
-        } else if (type === 'building') {
-            ctx.fillStyle = '#999999';
-            ctx.fillRect(0,0,128,128);
-            ctx.fillStyle = '#ffffaa'; 
-            for(let y=10; y<128; y+=32) {
-                for(let x=10; x<128; x+=20) {
-                    if(Math.random() > 0.3) ctx.fillRect(x, y, 12, 18);
-                }
-            }
         } else if (type === 'roof') {
             ctx.fillStyle = '#555555'; 
             ctx.fillRect(0, 0, 128, 128);
@@ -739,8 +849,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 chunk.meshes.forEach(m => { 
                     scene.remove(m); 
                     if(m.geometry) m.geometry.dispose();
-                    if(Array.isArray(m.material)) m.material.forEach(mat=>mat.dispose());
-                    else if(m.material) m.material.dispose();
+                    if(Array.isArray(m.material)) {
+                        m.material.forEach(mat => {
+                            // Safely flag animated canvases so the array cleans them up
+                            if(mat.map) { mat.map.isDisposed = true; mat.map.dispose(); }
+                            mat.dispose();
+                        });
+                    } else if(m.material) {
+                        if(m.material.map) { m.material.map.isDisposed = true; m.material.map.dispose(); }
+                        m.material.dispose();
+                    }
                 });
                 chunk.bodies.forEach(b => world.destroyBody(b));
                 chunk.roadData.forEach(t => delete roadLookup[`${t.x},${t.z}`]);
@@ -969,6 +1087,9 @@ document.addEventListener('DOMContentLoaded', () => {
         checkDeviceJoins();
 
         if (!gameActive || isPaused) return;
+
+        // Process Building lights independently of framerate
+        lightManager.update();
 
         if (Math.random() < 0.1) spawnTraffic();
         updateHighway();
