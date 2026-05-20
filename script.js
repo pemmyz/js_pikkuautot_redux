@@ -1,4 +1,3 @@
-
 document.addEventListener('DOMContentLoaded', () => {
     // --- Configuration Constants ---
     const ASSET_FOLDER = 'auto/';
@@ -125,6 +124,56 @@ document.addEventListener('DOMContentLoaded', () => {
     let roadLookup = {}; 
     let skidMarks = []; // Array to manage tire marks
     let skidTexture = null;
+
+    // --- PATHFINDING & INTERSECTION GLOBALS ---
+    let intersectionLocks = {}; // Locks "x,z" coordinates to a specific Car object
+
+    function getNeighbors(nodeKey) {
+        const [x, z] = nodeKey.split(',').map(Number);
+        const dirs = [[0, -BLOCK_SIZE], [BLOCK_SIZE, 0], [0, BLOCK_SIZE], [-BLOCK_SIZE, 0]];
+        return dirs.map(d => `${x + d[0]},${z + d[1]}`).filter(k => roadLookup[k]);
+    }
+
+    function heuristic(aKey, bKey) {
+        const [ax, az] = aKey.split(',').map(Number);
+        const [bx, bz] = bKey.split(',').map(Number);
+        return Math.abs(ax - bx) + Math.abs(az - bz);
+    }
+
+    function aStar(startKey, goalKey) {
+        const openSet = [startKey];
+        const cameFrom = {};
+        const gScore = { [startKey]: 0 };
+        const fScore = { [startKey]: heuristic(startKey, goalKey) };
+
+        while (openSet.length > 0) {
+            openSet.sort((a, b) => fScore[a] - fScore[b]);
+            const current = openSet.shift();
+
+            if (current === goalKey) {
+                const path = [current];
+                let curr = current;
+                while (cameFrom[curr]) {
+                    curr = cameFrom[curr];
+                    path.unshift(curr);
+                }
+                return path;
+            }
+
+            for (const neighbor of getNeighbors(current)) {
+                const t_gScore = gScore[current] + BLOCK_SIZE;
+                if (gScore[neighbor] === undefined || t_gScore < gScore[neighbor]) {
+                    cameFrom[neighbor] = current;
+                    gScore[neighbor] = t_gScore;
+                    fScore[neighbor] = t_gScore + heuristic(neighbor, goalKey);
+                    if (!openSet.includes(neighbor)) {
+                        openSet.push(neighbor);
+                    }
+                }
+            }
+        }
+        return []; 
+    }
     
     const CAT_PLAYER = 0x0001;
     const CAT_ENEMY = 0x0002;
@@ -347,6 +396,13 @@ document.addEventListener('DOMContentLoaded', () => {
             this.mesh.rotation.y = -angle; 
         }
         destroy() {
+            // Release any crossroad locks this entity might be holding
+            for (let key in intersectionLocks) {
+                if (intersectionLocks[key] === this) {
+                    intersectionLocks[key] = null;
+                }
+            }
+
             if (this.mesh) {
                 scene.remove(this.mesh);
                 if(this.mesh.geometry) this.mesh.geometry.dispose();
@@ -453,6 +509,8 @@ document.addEventListener('DOMContentLoaded', () => {
             this.plannedAction = plannedAction; 
             this.laneOffset = laneOffset; 
             this.stuckTimer = 0; 
+            this.path = [];
+            this.currentKey = null;
 
             // Control Inputs
             this.throttleInput = 0;
@@ -613,40 +671,126 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const tileX = Math.round(pos.x / BLOCK_SIZE) * BLOCK_SIZE;
             const tileZ = Math.round(pos.y / BLOCK_SIZE) * BLOCK_SIZE;
-            const tileKey = `${tileX},${tileZ}`;
+            const currentKey = `${tileX},${tileZ}`;
             
-            if(physVel < 2.0) {
-                this.stuckTimer += dt;
-                if(this.stuckTimer > 0.5) {
-                    this.drive(-1, 1, false); 
-                    return;
+            if (!this.path) this.path = [];
+
+            // Tile Change Tracker
+            if (this.currentKey !== currentKey) {
+                // Free previous lock retrospectively when leaving
+                if (this.currentKey && intersectionLocks[this.currentKey] === this) {
+                    intersectionLocks[this.currentKey] = null;
                 }
-            } else {
-                this.stuckTimer = 0;
-            }
-            if (this.stuckTimer > 4.0 && currentMapType === 'default') this.markedForDeletion = true;
-
-            if (currentMapType !== 'default' && pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ)) < 8.0 && this.lastDecisionTile !== tileKey) {
-                this.lastDecisionTile = tileKey;
-                this.makeTurnDecision(tileX, tileZ);
+                this.currentKey = currentKey;
+                
+                // Pop the tile we just arrived at
+                if (this.path.length > 0 && this.path[0] === currentKey) {
+                    this.path.shift();
+                }
             }
 
-            const currentAngle = this.body.getAngle();
-            const angleToTarget = angleDiff(this.aiTargetAngle, currentAngle);
-            let steer = 0;
             let throttle = 0;
+            let steer = 0;
             let brake = false;
 
-            if (Math.abs(angleToTarget) > 0.1) {
-                steer = angleToTarget > 0 ? -1 : 1; 
-                throttle = 0.5; 
+            // Simple default steering for Infinite Highway
+            if (currentMapType === 'default') {
+                if(physVel < 2.0) {
+                    this.stuckTimer += dt;
+                    if(this.stuckTimer > 0.5) {
+                        this.drive(-1, 1, false); 
+                        return;
+                    }
+                } else {
+                    this.stuckTimer = 0;
+                }
+                if (this.stuckTimer > 4.0 && currentMapType === 'default') this.markedForDeletion = true;
+
+                if (pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ)) < 8.0 && this.lastDecisionTile !== currentKey) {
+                    this.lastDecisionTile = currentKey;
+                    this.makeTurnDecision(tileX, tileZ);
+                }
+                
+                const currentAngle = this.body.getAngle();
+                const angleToTarget = angleDiff(this.aiTargetAngle, currentAngle);
+
+                if (Math.abs(angleToTarget) > 0.1) {
+                    steer = angleToTarget > 0 ? -1 : 1; 
+                    throttle = 0.5; 
+                } else {
+                    steer = angleToTarget * -2.0; 
+                    throttle = 1.0;
+                }
             } else {
-                steer = angleToTarget * -2.0; 
-                throttle = 1.0;
+                // --- CITY A* PATHFINDING LOGIC ---
+                
+                // Get a new random path if needed
+                if (this.path.length === 0 && roadTiles.length > 0) {
+                    const targetTile = roadTiles[Math.floor(Math.random() * roadTiles.length)];
+                    this.path = aStar(currentKey, `${targetTile.x},${targetTile.z}`);
+                    if (this.path.length > 0 && this.path[0] === currentKey) {
+                        this.path.shift();
+                    }
+                }
+
+                if (this.path.length > 0) {
+                    const nextKey = this.path[0];
+                    const [nx, nz] = nextKey.split(',').map(Number);
+                    
+                    // Crossroads checking
+                    const neighborsCount = getNeighbors(nextKey).length;
+                    const isIntersection = neighborsCount > 2;
+
+                    let canProceed = true;
+                    if (isIntersection) {
+                        if (!intersectionLocks[nextKey] || intersectionLocks[nextKey] === this) {
+                            intersectionLocks[nextKey] = this; // Lock Claimed!
+                        } else {
+                            canProceed = false; // Claimed by someone else
+                        }
+                    }
+
+                    if (!canProceed) {
+                        throttle = 0;
+                        brake = true;
+                        this.stuckTimer = 0; // Suspend unstuck behavior while waiting 
+                    } else {
+                        // Align Angle toward next node natively
+                        if (nx > tileX) this.aiTargetAngle = -Math.PI/2;
+                        else if (nx < tileX) this.aiTargetAngle = Math.PI/2;
+                        else if (nz > tileZ) this.aiTargetAngle = Math.PI;
+                        else if (nz < tileZ) this.aiTargetAngle = 0;
+                        
+                        throttle = 1.0;
+
+                        if(physVel < 2.0) {
+                            this.stuckTimer += dt;
+                            if(this.stuckTimer > 1.5) {
+                                this.drive(-1, 1, false); 
+                                return;
+                            }
+                        } else {
+                            this.stuckTimer = 0;
+                        }
+                    }
+                } else {
+                    throttle = 0;
+                    brake = true;
+                }
+
+                const currentAngle = this.body.getAngle();
+                const angleToTarget = angleDiff(this.aiTargetAngle, currentAngle);
+
+                if (Math.abs(angleToTarget) > 0.15 && throttle > 0) {
+                    steer = angleToTarget > 0 ? -1 : 1; 
+                    throttle = 0.6; // Cornering speed
+                } else {
+                    steer = angleToTarget * -3.0; 
+                }
             }
 
             const maxVel = this.maxSpeed / 3.6;
-            if (physVel > maxVel) throttle = 0;
+            if (physVel > maxVel && throttle > 0) throttle = 0;
 
             this.drive(throttle, clamp(steer, -1, 1), brake);
         }
@@ -1225,6 +1369,7 @@ document.addEventListener('DOMContentLoaded', () => {
             entities.forEach(e => e.destroy());
             skidMarks.forEach(s => s.destroy());
             entities = []; trafficPool = []; skidMarks = [];
+            intersectionLocks = {}; // Clear previous locks 
             
             if(type === 'default') createCity(); 
             else {
