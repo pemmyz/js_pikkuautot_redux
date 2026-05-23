@@ -170,6 +170,15 @@
                 </div>
 
                 <div class="setting-row">
+                    <label>AI Route Rule:</label>
+                    <select id="aiRouteSelect" style="background:#333; color:#fff; border:1px solid #666; padding: 2px;">
+                        <option value="random">Random Pathfinding</option>
+                        <option value="straight_uturn">Straight & U-Turn</option>
+                        <option value="right_only">Always Turn Right</option>
+                    </select>
+                </div>
+
+                <div class="setting-row">
                     <label>Car Speed:</label>
                     <input type="range" id="playerSpeedSlider" min="10" max="150" step="5" value="100">
                     <span class="slider-value" id="playerSpeedValue">100</span>
@@ -181,8 +190,8 @@
                 </div>
                  <div class="setting-row">
                     <label>Traffic Density:</label>
-                    <input type="range" id="densitySlider" min="5" max="100" step="1" value="20">
-                    <span class="slider-value" id="densityValue">20</span>
+                    <input type="range" id="densitySlider" min="5" max="200" step="1" value="40">
+                    <span class="slider-value" id="densityValue">40</span>
                 </div>
             </div>
             <hr>

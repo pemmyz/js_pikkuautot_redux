@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let gameParams = {
         playerSpeed: 300, // Player Speed Scalar
         enemySpeed: 60,   // AI Normal Speed
-        trafficCount: 20, 
+        trafficCount: 40, 
         spawnRadius: 120,
         simpleMaterials: false, 
         particlesEnabled: true,
@@ -48,6 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // --- AI Behavior ---
         aiMode: 'cruiser', 
+        aiRoute: 'random',
 
         // --- OLD ARCADE Physics Params ---
         gtaGrip: 0.12,          
@@ -693,19 +694,30 @@ document.addEventListener('DOMContentLoaded', () => {
             let steer = 0;
             let brake = false;
 
-            // Simple default steering for Infinite Highway
-            if (currentMapType === 'default') {
+            let useAStar = (currentMapType !== 'default' && gameParams.aiRoute === 'random');
+
+            // Steering Logic
+            if (!useAStar) {
+                // Highway OR rule-based routing (Straight/U-turn or Right Only)
                 if(physVel < 2.0) {
                     this.stuckTimer += dt;
                     if(this.stuckTimer > 0.5) {
-                        this.drive(-1, 1, false); 
-                        return;
+                        if (gameParams.aiRoute === 'random') {
+                            this.drive(-1, 1, false); 
+                            return;
+                        } else {
+                            // "even if they collide with other cars make them continue their journey"
+                            // Keep pushing forward when stuck instead of reversing
+                            throttle = 1.0;
+                        }
                     }
                 } else {
                     this.stuckTimer = 0;
                 }
+                
                 if (this.stuckTimer > 4.0 && currentMapType === 'default') this.markedForDeletion = true;
 
+                // Make turning decision at intersections
                 if (pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ)) < 8.0 && this.lastDecisionTile !== currentKey) {
                     this.lastDecisionTile = currentKey;
                     this.makeTurnDecision(tileX, tileZ);
@@ -714,12 +726,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 const currentAngle = this.body.getAngle();
                 const angleToTarget = angleDiff(this.aiTargetAngle, currentAngle);
 
-                if (Math.abs(angleToTarget) > 0.1) {
+                // Right-hand drive lateral offset calculation
+                let rx = Math.cos(this.aiTargetAngle);
+                let rz = Math.sin(this.aiTargetAngle);
+                let dx = pos.x - tileX;
+                let dz = pos.y - tileZ;
+                let lateralDist = dx * rx + dz * rz;
+                
+                let targetLaneOffset = (currentMapType === 'default') ? this.laneOffset : 3.0;
+                let laneError = lateralDist - targetLaneOffset; // Positive means too far right
+                
+                if (Math.abs(angleToTarget) > 0.1 && this.stuckTimer === 0) {
                     steer = angleToTarget > 0 ? -1 : 1; 
                     throttle = 0.5; 
                 } else {
-                    steer = angleToTarget * -2.0; 
-                    throttle = 1.0;
+                    // Pull back to the right lane based on cross-track error offset
+                    steer = (angleToTarget * -2.5) - (laneError * 0.3);
+                    if (this.stuckTimer === 0) throttle = 1.0;
                 }
             } else {
                 // --- CITY A* PATHFINDING LOGIC ---
@@ -809,19 +832,35 @@ document.addEventListener('DOMContentLoaded', () => {
             const straight = valid.find(n => Math.abs(getRel(n.angle)) < 0.1);
             const left     = valid.find(n => Math.abs(getRel(n.angle) - Math.PI/2) < 0.1); 
             const right    = valid.find(n => Math.abs(getRel(n.angle) + Math.PI/2) < 0.1);
+            const uturn    = valid.find(n => Math.abs(getRel(n.angle) - Math.PI) < 0.1);
 
             let selected = null;
-            if (this.plannedAction === 'left' && left) selected = left;
-            else if (this.plannedAction === 'right' && right) selected = right;
-            else if (straight) selected = straight;
-            else selected = left || right;
+            
+            if (gameParams.aiRoute === 'straight_uturn') {
+                if (straight) selected = straight;
+                else if (uturn) selected = uturn;
+                else if (right) selected = right;
+                else if (left) selected = left;
+            } else if (gameParams.aiRoute === 'right_only') {
+                if (right) selected = right;
+                else if (straight) selected = straight;
+                else if (left) selected = left;
+                else if (uturn) selected = uturn;
+            } else {
+                if (this.plannedAction === 'left' && left) selected = left;
+                else if (this.plannedAction === 'right' && right) selected = right;
+                else if (straight) selected = straight;
+                else selected = left || right;
 
-            if (!selected && valid.length > 0) selected = valid[Math.floor(Math.random()*valid.length)];
+                if (!selected && valid.length > 0) selected = valid[Math.floor(Math.random()*valid.length)];
+            }
             
             if(selected) {
                 this.aiTargetAngle = selected.angle;
-                if (this.plannedAction === 'left') this.plannedAction = (Math.random() < 0.3) ? 'left' : 'straight';
-                else if (this.plannedAction === 'right') this.plannedAction = (Math.random() < 0.6) ? 'right' : 'straight';
+                if (gameParams.aiRoute === 'random') {
+                    if (this.plannedAction === 'left') this.plannedAction = (Math.random() < 0.3) ? 'left' : 'straight';
+                    else if (this.plannedAction === 'right') this.plannedAction = (Math.random() < 0.6) ? 'right' : 'straight';
+                }
             }
         }
 
@@ -846,7 +885,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function createBullet(x, y, vx, vy, ownerIndex) {
+
+function createBullet(x, y, vx, vy, ownerIndex) {
         const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
         const mat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
         const mesh = new THREE.Mesh(geo, mat);
@@ -1079,16 +1119,23 @@ document.addEventListener('DOMContentLoaded', () => {
              if (!validTile) return; 
 
              let x = validTile.x, z = validTile.z, angle = 0;
+             let laneOffset = 0;
              if (currentMapType === 'default') {
                  trafficSpawnCounter++;
                  const lane = trafficSpawnCounter % 4;
                  x = (lane === 0) ? 2.5 : (lane === 1) ? 6.5 : (lane === 2) ? -2.5 : -6.5;
                  angle = x > 0 ? 0 : Math.PI;
+                 laneOffset = x;
              } else {
                  angle = (Math.random() > 0.5) ? 0 : Math.PI/2;
+                 if (gameParams.aiRoute !== 'random') {
+                     // Offset start position so they spawn naturally in the correct lane
+                     x += Math.cos(angle) * 3.0;
+                     z += Math.sin(angle) * 3.0;
+                 }
              }
 
-             const car = new Car(x, z, false, 0, tex, 'straight', 0);
+             const car = new Car(x, z, false, 0, tex, 'straight', laneOffset);
              car.body.setAngle(angle);
              car.aiTargetAngle = angle;
              entities.push(car);
@@ -1489,6 +1536,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('camHeightSlider').oninput = (e) => { gameParams.cameraHeight = parseInt(e.target.value); document.getElementById('camHeightValue').innerText = e.target.value; };
     document.getElementById('fovSlider').oninput = (e) => { gameParams.cameraFOV = parseInt(e.target.value); document.getElementById('fovValue').innerText = e.target.value; };
     document.getElementById('aiModeSelect').onchange = (e) => gameParams.aiMode = e.target.value;
+    
+    if(document.getElementById('aiRouteSelect')) {
+        document.getElementById('aiRouteSelect').onchange = (e) => gameParams.aiRoute = e.target.value;
+    }
     
     const updateSlider = (id, paramKey, displayId) => {
         const el = document.getElementById(id);
