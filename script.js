@@ -78,10 +78,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const mapMenu = document.getElementById('mapMenu');
     const optionsHint = document.getElementById('optionsHint');
 
+    // --- Fixed Resolution Setup ---
+    const BASE_WIDTH = 960;
+    const BASE_HEIGHT = 720;
+
     // --- THREE.JS Setup ---
     const container = document.getElementById('canvas-container');
     const renderer = new THREE.WebGLRenderer({ antialias: true }); 
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setSize(BASE_WIDTH, BASE_HEIGHT);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     
@@ -97,20 +101,14 @@ document.addEventListener('DOMContentLoaded', () => {
     scene.background = new THREE.Color(0x222222);
     scene.fog = new THREE.Fog(0x222222, 50, 160); 
 
-    const camera1 = new THREE.PerspectiveCamera(gameParams.cameraFOV, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const camera1 = new THREE.PerspectiveCamera(gameParams.cameraFOV, BASE_WIDTH / BASE_HEIGHT, 0.1, 1000);
     camera1.position.set(0, gameParams.cameraHeight, 30); 
 
-    const camera2 = new THREE.PerspectiveCamera(gameParams.cameraFOV, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const camera2 = new THREE.PerspectiveCamera(gameParams.cameraFOV, BASE_WIDTH / BASE_HEIGHT, 0.1, 1000);
     camera2.position.set(0, gameParams.cameraHeight, 30); 
 
-    // Handle Window Resize
     window.addEventListener('resize', () => {
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        const uiCanvas = document.getElementById('uiCanvas');
-        if(uiCanvas) {
-            uiCanvas.width = window.innerWidth;
-            uiCanvas.height = window.innerHeight;
-        }
+        if(typeof scaleGame === 'function') scaleGame();
     });
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
@@ -143,8 +141,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- UI Canvas Setup ---
     const uiCanvas = document.getElementById('uiCanvas');
-    uiCanvas.width = window.innerWidth;
-    uiCanvas.height = window.innerHeight;
+    uiCanvas.width = BASE_WIDTH;
+    uiCanvas.height = BASE_HEIGHT;
     const uiCtx = uiCanvas.getContext('2d');
 
     // --- PATHFINDING & INTERSECTION GLOBALS ---
@@ -901,7 +899,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 
-function createBullet(x, y, vx, vy, ownerIndex) {
+    function createBullet(x, y, vx, vy, ownerIndex) {
         const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
         const mat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
         const mesh = new THREE.Mesh(geo, mat);
@@ -1339,7 +1337,7 @@ function createBullet(x, y, vx, vy, ownerIndex) {
             }
         });
 
-// Draw Player Icon
+        // Draw Player Icon
         ctx.fillStyle = player === player1 ? '#ffcc00' : '#cc66ff';
         ctx.save();
         ctx.translate(px, pz);
@@ -1509,8 +1507,9 @@ function createBullet(x, y, vx, vy, ownerIndex) {
             dirLight.target.updateMatrixWorld();
         }
 
-        const w = window.innerWidth;
-        const h = window.innerHeight;
+        const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement;
+        const w = isFullscreen ? BASE_WIDTH : window.innerWidth;
+        const h = isFullscreen ? BASE_HEIGHT : window.innerHeight;
 
         if (numPlayers === 1) {
             camera1.aspect = w / h; camera1.updateProjectionMatrix();
@@ -1784,4 +1783,100 @@ function createBullet(x, y, vx, vy, ownerIndex) {
     updateSlider('playerSpeedSlider', 'playerSpeed', 'playerSpeedValue');
     updateSlider('enemySpeedSlider', 'enemySpeed', 'enemySpeedValue');
     updateSlider('densitySlider', 'trafficCount', 'densityValue');
+
+    // --- FULLSCREEN SCALING LOGIC & MOBILE CONTROLS ---
+    const mobileToggleBtn = document.getElementById('mobile-btn');
+    const mobileControls = document.getElementById('mobile-controls');
+    const mobileLeftBtn = document.getElementById('mobile-left');
+    const mobileRightBtn = document.getElementById('mobile-right');
+    const mobileUpBtn = document.getElementById('mobile-up');
+    const mobileDownBtn = document.getElementById('mobile-down');
+    const screenElement = document.getElementById("screen");
+
+    window.scaleGame = function() {
+        const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement;
+
+        if (isFullscreen) {
+            // Fullscreen / Mobile Mode: Lock to fixed resolution and scale via CSS
+            const scale = Math.min(
+                window.innerWidth / BASE_WIDTH,
+                window.innerHeight / BASE_HEIGHT
+            );
+            screenElement.style.width = `${BASE_WIDTH}px`;
+            screenElement.style.height = `${BASE_HEIGHT}px`;
+            screenElement.style.transform = `scale(${scale})`;
+            document.body.classList.add('mobile-mode');
+            
+            renderer.setSize(BASE_WIDTH, BASE_HEIGHT);
+            if (uiCanvas) {
+                uiCanvas.width = BASE_WIDTH;
+                uiCanvas.height = BASE_HEIGHT;
+            }
+        } else {
+            // Desktop Mode: Scale the game area fluidly to the browser window
+            screenElement.style.width = '100vw';
+            screenElement.style.height = '100vh';
+            screenElement.style.transform = 'none'; 
+            document.body.classList.remove('mobile-mode');
+            
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            if (uiCanvas) {
+                uiCanvas.width = window.innerWidth;
+                uiCanvas.height = window.innerHeight;
+            }
+        }
+    };
+
+    function goFull() {
+        const el = document.documentElement;
+        if (el.requestFullscreen) el.requestFullscreen();
+        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    }
+
+    window.addEventListener("fullscreenchange", scaleGame);
+    window.addEventListener("webkitfullscreenchange", scaleGame);
+    
+    // Initial check
+    scaleGame();
+    
+    if (mobileToggleBtn) {
+        mobileToggleBtn.addEventListener('click', goFull);
+    }
+
+    function setupMobileControls() {
+        if (!mobileControls) return;
+
+        // Helper to map touch/mouse events to keys
+        const addControlListener = (element, keyCode) => {
+            if (!element) return;
+            const pressKey = (e) => {
+                if(e.cancelable) e.preventDefault(); 
+                keys[keyCode] = true;
+            };
+            const releaseKey = (e) => {
+                if(e.cancelable) e.preventDefault();
+                keys[keyCode] = false;
+            };
+
+            // Touch Events
+            element.addEventListener('touchstart', pressKey, { passive: false });
+            element.addEventListener('touchend', releaseKey, { passive: false });
+            element.addEventListener('touchcancel', releaseKey, { passive: false });
+            
+            // Mouse Events
+            element.addEventListener('mousedown', pressKey);
+            element.addEventListener('mouseup', releaseKey);
+            element.addEventListener('mouseleave', (e) => {
+                if (e.buttons === 1) { releaseKey(e); }
+            });
+        };
+
+        // Map Buttons to Arrow Keys
+        addControlListener(mobileLeftBtn, 'ArrowLeft');
+        addControlListener(mobileRightBtn, 'ArrowRight');
+        addControlListener(mobileUpBtn, 'ArrowUp');
+        addControlListener(mobileDownBtn, 'ArrowDown');
+    }
+
+    setupMobileControls();
 });

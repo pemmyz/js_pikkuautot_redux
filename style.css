@@ -1,26 +1,124 @@
 body {
     margin: 0;
     padding: 0;
-    background-color: #111;
-    overflow: hidden;
+    background-color: #000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden; /* Hide overflow to make it tight */
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     color: #eee;
     user-select: none;
 }
 
+/* --- MOBILE MODE LOCK --- */
+body.mobile-mode {
+    position: fixed;
+    width: 100%;
+    height: 100%;
+    top: 0;
+    left: 0;
+}
+
 #gameContainer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
     position: relative;
-    width: 100vw;
-    height: 100vh;
+    width: 100%;
+    height: 100%;
+}
+
+/* THE SCREEN: Fixed Internal Resolution */
+#screen {
+    width: 960px;
+    height: 720px;
+    background: #1a1a1a;
+    position: relative;
+    overflow: hidden;
+    transform-origin: center center;
+    box-shadow: 0 0 50px rgba(0,0,0,0.8);
+    flex-shrink: 0;
 }
 
 #canvas-container {
     width: 100%;
     height: 100%;
     display: block;
+    position: absolute;
+    top: 0; left: 0;
 }
 
 canvas { display: block; }
+
+/* --- TOGGLE BUTTON --- */
+#mobile-btn {
+    position: fixed;
+    top: 10px; left: 10px;
+    z-index: 2000;
+    background: #333;
+    color: white;
+    border: 2px solid #555;
+    font-size: 12px;
+    padding: 8px;
+    cursor: pointer;
+    border-radius: 4px;
+}
+body.mobile-mode #mobile-btn { display: none; }
+
+/* --- MOBILE CONTROLS OVERLAY --- */
+#mobile-controls {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 3000;
+    display: none;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+body.mobile-mode #mobile-controls {
+    display: flex;
+}
+
+.mobile-control-btn {
+    pointer-events: auto;
+    width: 80px; height: 80px;
+    background: rgba(255,255,255,0.15);
+    border: 3px solid rgba(255,255,255,0.4);
+    border-radius: 50%;
+    color: white;
+    font-size: 30px;
+    display: flex; justify-content: center; align-items: center;
+    user-select: none;
+    backdrop-filter: blur(4px);
+    margin-bottom: 20px;
+    transition: transform 0.1s, background 0.1s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-control-btn:active {
+    background: rgba(255,255,255,0.4);
+    transform: scale(0.95);
+}
+
+#mobile-dpad {
+    display: flex;
+    gap: 15px;
+    margin-left: 20px;
+    margin-bottom: 20px;
+}
+
+#mobile-action {
+    display: flex;
+    gap: 15px;
+    margin-right: 20px;
+    margin-bottom: 20px;
+}
 
 /* Header & HUD */
 #gameHeader.hidden, #hud.hidden, #optionsHint.hidden { display: none; }
