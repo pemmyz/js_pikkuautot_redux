@@ -32,6 +32,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let highwayChunks = [];
     const CHUNK_LENGTH = 400;
 
+    // --- Map & Routing State ---
+    let isMapOpen = false;
+    let mapView = { x: 0, z: 0, zoom: 2 };
+    let mapDrag = { active: false, startX: 0, startY: 0, lastX: 0, lastY: 0, moved: false };
+    let destinationKey = null;
+    let forcePathRecompute = false;
+    let p1Path = [];
+    let p2Path = [];
+
     let gameParams = {
         playerSpeed: 300, // Player Speed Scalar
         enemySpeed: 60,   // AI Normal Speed
@@ -66,6 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const helpMenu = document.getElementById('helpMenu');
     const customizeMenu = document.getElementById('customizeMenu');
     const optionsMenu = document.getElementById('optionsMenu');
+    const mapMenu = document.getElementById('mapMenu');
     const optionsHint = document.getElementById('optionsHint');
 
     // --- THREE.JS Setup ---
@@ -96,6 +106,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Handle Window Resize
     window.addEventListener('resize', () => {
         renderer.setSize(window.innerWidth, window.innerHeight);
+        const uiCanvas = document.getElementById('uiCanvas');
+        if(uiCanvas) {
+            uiCanvas.width = window.innerWidth;
+            uiCanvas.height = window.innerHeight;
+        }
     });
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
@@ -126,6 +141,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let skidMarks = []; // Array to manage tire marks
     let skidTexture = null;
 
+    // --- UI Canvas Setup ---
+    const uiCanvas = document.getElementById('uiCanvas');
+    uiCanvas.width = window.innerWidth;
+    uiCanvas.height = window.innerHeight;
+    const uiCtx = uiCanvas.getContext('2d');
+
     // --- PATHFINDING & INTERSECTION GLOBALS ---
     let intersectionLocks = {}; // Locks "x,z" coordinates to a specific Car object
 
@@ -146,8 +167,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const cameFrom = {};
         const gScore = { [startKey]: 0 };
         const fScore = { [startKey]: heuristic(startKey, goalKey) };
+        let iter = 0;
+        const MAX_ITER = 1500; // Hard cap against infinite path finding on isolated maps
 
-        while (openSet.length > 0) {
+        while (openSet.length > 0 && iter++ < MAX_ITER) {
             openSet.sort((a, b) => fScore[a] - fScore[b]);
             const current = openSet.shift();
 
@@ -176,6 +199,28 @@ document.addEventListener('DOMContentLoaded', () => {
         return []; 
     }
     
+    // Updates the planned routes visually
+    function updatePlayerPaths() {
+        if (!destinationKey) return;
+        
+        [player1, player2].forEach((p, index) => {
+            if (!p) return;
+            const pos = p.body.getPosition();
+            const tileX = Math.round(pos.x / BLOCK_SIZE) * BLOCK_SIZE;
+            const tileZ = Math.round(pos.y / BLOCK_SIZE) * BLOCK_SIZE;
+            const currentKey = `${tileX},${tileZ}`;
+            
+            // Recompute if forced (destination changed) or if moved to a new map node
+            if (forcePathRecompute || p.lastPathKey !== currentKey) {
+                p.lastPathKey = currentKey;
+                const path = aStar(currentKey, destinationKey);
+                if (index === 0) p1Path = path;
+                else p2Path = path;
+            }
+        });
+        forcePathRecompute = false;
+    }
+
     const CAT_PLAYER = 0x0001;
     const CAT_ENEMY = 0x0002;
     const CAT_BULLET = 0x0004;
@@ -191,23 +236,20 @@ document.addEventListener('DOMContentLoaded', () => {
             this.canvas.height = 128;
             this.ctx = this.canvas.getContext('2d');
             
-            // Grid sizing mapped to the procedural 128x128 texture
             this.cols = 6; 
             this.rows = 4;
             this.windowSizeW = 12;
             this.windowSizeH = 18;
             
-            // Initialize Window States (Random ON/OFF at start)
             this.windowStates = [];
             for (let r = 0; r < this.rows; r++) {
                 const row = [];
                 for (let c = 0; c < this.cols; c++) {
-                    row.push(Math.random() < 0.5); // 50% chance
+                    row.push(Math.random() < 0.5); 
                 }
                 this.windowStates.push(row);
             }
             
-            // Base Texture Object
             this.texture = new THREE.CanvasTexture(this.canvas);
             this.texture.wrapS = THREE.RepeatWrapping;
             this.texture.wrapT = THREE.RepeatWrapping;
@@ -215,31 +257,25 @@ document.addEventListener('DOMContentLoaded', () => {
             this.texture.minFilter = THREE.LinearFilter;
             this.texture.colorSpace = THREE.SRGBColorSpace;
             
-            // Array to keep track of building mesh clones sharing this canvas
             this.textureInstances = []; 
             this.draw();
         }
 
         draw() {
             const ctx = this.ctx;
-            // Draw main building body
             ctx.fillStyle = '#999999';
             ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-            // Draw windows based on boolean state
             for (let r = 0; r < this.rows; r++) {
                 for (let c = 0; c < this.cols; c++) {
                     const isLightOn = this.windowStates[r][c];
                     ctx.fillStyle = isLightOn ? '#ffffaa' : '#333333';
-                    
                     const windowX = 10 + (c * 20);
                     const windowY = 10 + (r * 32);
-                    
                     ctx.fillRect(windowX, windowY, this.windowSizeW, this.windowSizeH);
                 }
             }
             
-            // Flag base texture and all cloned instances for WebGL re-upload
             this.texture.needsUpdate = true;
             this.textureInstances.forEach(t => t.needsUpdate = true);
         }
@@ -254,7 +290,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (animatedBuildings.length === 0) return;
             const currentTime = performance.now();
 
-            // Check if it's time to blink some windows
             if (currentTime >= this.nextBlinkTime) {
                 const numWindowsToToggle = Math.floor(Math.random() * 7) + 2; 
 
@@ -265,7 +300,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     const r = Math.floor(Math.random() * building.rows);
                     const c = Math.floor(Math.random() * building.cols);
 
-                    // Toggle the state and redraw
                     if (building.windowStates[r] !== undefined && building.windowStates[r][c] !== undefined) {
                         building.windowStates[r][c] = !building.windowStates[r][c];
                         building.draw(); 
@@ -275,7 +309,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const delayInMilliseconds = (Math.random() * 0.5 + 0.25) * 1000;
                 this.nextBlinkTime = currentTime + delayInMilliseconds;
                 
-                // Cleanup disposed cloned instances to prevent memory leaks in the endless map
                 animatedBuildings.forEach(b => {
                     b.textureInstances = b.textureInstances.filter(t => !t.isDisposed);
                 });
@@ -289,16 +322,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const textureLoader = new THREE.TextureLoader();
     
     function createProceduralTexture(type) {
-        // Return pooled animated building textures
         if (type === 'building') {
             if (animatedBuildings.length === 0) {
-                // Generate a pool of 15 unique building textures to share across the city
                 for (let i = 0; i < 15; i++) {
                     animatedBuildings.push(new AnimatedBuildingTexture());
                 }
             }
             const bldg = animatedBuildings[Math.floor(Math.random() * animatedBuildings.length)];
-            const clonedTex = bldg.texture.clone(); // Clone to allow independent UV mapping repeats
+            const clonedTex = bldg.texture.clone(); 
             bldg.textureInstances.push(clonedTex);
             return clonedTex;
         }
@@ -397,7 +428,6 @@ document.addEventListener('DOMContentLoaded', () => {
             this.mesh.rotation.y = -angle; 
         }
         destroy() {
-            // Release any crossroad locks this entity might be holding
             for (let key in intersectionLocks) {
                 if (intersectionLocks[key] === this) {
                     intersectionLocks[key] = null;
@@ -513,15 +543,15 @@ document.addEventListener('DOMContentLoaded', () => {
             this.path = [];
             this.currentKey = null;
 
-            // Control Inputs
             this.throttleInput = 0;
             this.steerInput = 0;
             this.handbrakeInput = false;
 
-            // Arcade State
             this.speed = 0;
             this.vx = 0;
             this.vy = 0;
+            
+            this.lastPathKey = null; // Used for dynamic path recalculation
         }
 
         update(dt) {
@@ -676,15 +706,12 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (!this.path) this.path = [];
 
-            // Tile Change Tracker
             if (this.currentKey !== currentKey) {
-                // Free previous lock retrospectively when leaving
                 if (this.currentKey && intersectionLocks[this.currentKey] === this) {
                     intersectionLocks[this.currentKey] = null;
                 }
                 this.currentKey = currentKey;
                 
-                // Pop the tile we just arrived at
                 if (this.path.length > 0 && this.path[0] === currentKey) {
                     this.path.shift();
                 }
@@ -696,9 +723,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             let useAStar = (currentMapType !== 'default' && gameParams.aiRoute === 'random');
 
-            // Steering Logic
             if (!useAStar) {
-                // Highway OR rule-based routing (Straight/U-turn or Right Only)
                 if(physVel < 2.0) {
                     this.stuckTimer += dt;
                     if(this.stuckTimer > 0.5) {
@@ -706,8 +731,6 @@ document.addEventListener('DOMContentLoaded', () => {
                             this.drive(-1, 1, false); 
                             return;
                         } else {
-                            // "even if they collide with other cars make them continue their journey"
-                            // Keep pushing forward when stuck instead of reversing
                             throttle = 1.0;
                         }
                     }
@@ -717,7 +740,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 if (this.stuckTimer > 4.0 && currentMapType === 'default') this.markedForDeletion = true;
 
-                // Make turning decision at intersections
                 if (pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ)) < 8.0 && this.lastDecisionTile !== currentKey) {
                     this.lastDecisionTile = currentKey;
                     this.makeTurnDecision(tileX, tileZ);
@@ -726,7 +748,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const currentAngle = this.body.getAngle();
                 const angleToTarget = angleDiff(this.aiTargetAngle, currentAngle);
 
-                // Right-hand drive lateral offset calculation
                 let rx = Math.cos(this.aiTargetAngle);
                 let rz = Math.sin(this.aiTargetAngle);
                 let dx = pos.x - tileX;
@@ -734,20 +755,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 let lateralDist = dx * rx + dz * rz;
                 
                 let targetLaneOffset = (currentMapType === 'default') ? this.laneOffset : 3.0;
-                let laneError = lateralDist - targetLaneOffset; // Positive means too far right
+                let laneError = lateralDist - targetLaneOffset; 
                 
                 if (Math.abs(angleToTarget) > 0.1 && this.stuckTimer === 0) {
                     steer = angleToTarget > 0 ? -1 : 1; 
                     throttle = 0.5; 
                 } else {
-                    // Pull back to the right lane based on cross-track error offset
                     steer = (angleToTarget * -2.5) - (laneError * 0.3);
                     if (this.stuckTimer === 0) throttle = 1.0;
                 }
             } else {
-                // --- CITY A* PATHFINDING LOGIC ---
-                
-                // Get a new random path if needed
                 if (this.path.length === 0 && roadTiles.length > 0) {
                     const targetTile = roadTiles[Math.floor(Math.random() * roadTiles.length)];
                     this.path = aStar(currentKey, `${targetTile.x},${targetTile.z}`);
@@ -760,25 +777,23 @@ document.addEventListener('DOMContentLoaded', () => {
                     const nextKey = this.path[0];
                     const [nx, nz] = nextKey.split(',').map(Number);
                     
-                    // Crossroads checking
                     const neighborsCount = getNeighbors(nextKey).length;
                     const isIntersection = neighborsCount > 2;
 
                     let canProceed = true;
                     if (isIntersection) {
                         if (!intersectionLocks[nextKey] || intersectionLocks[nextKey] === this) {
-                            intersectionLocks[nextKey] = this; // Lock Claimed!
+                            intersectionLocks[nextKey] = this; 
                         } else {
-                            canProceed = false; // Claimed by someone else
+                            canProceed = false; 
                         }
                     }
 
                     if (!canProceed) {
                         throttle = 0;
                         brake = true;
-                        this.stuckTimer = 0; // Suspend unstuck behavior while waiting 
+                        this.stuckTimer = 0; 
                     } else {
-                        // Align Angle toward next node natively
                         if (nx > tileX) this.aiTargetAngle = -Math.PI/2;
                         else if (nx < tileX) this.aiTargetAngle = Math.PI/2;
                         else if (nz > tileZ) this.aiTargetAngle = Math.PI;
@@ -806,7 +821,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 if (Math.abs(angleToTarget) > 0.15 && throttle > 0) {
                     steer = angleToTarget > 0 ? -1 : 1; 
-                    throttle = 0.6; // Cornering speed
+                    throttle = 0.6; 
                 } else {
                     steer = angleToTarget * -3.0; 
                 }
@@ -1035,7 +1050,6 @@ function createBullet(x, y, vx, vy, ownerIndex) {
                     if(m.geometry) m.geometry.dispose();
                     if(Array.isArray(m.material)) {
                         m.material.forEach(mat => {
-                            // Safely flag animated canvases so the array cleans them up
                             if(mat.map) { mat.map.isDisposed = true; mat.map.dispose(); }
                             mat.dispose();
                         });
@@ -1129,7 +1143,6 @@ function createBullet(x, y, vx, vy, ownerIndex) {
              } else {
                  angle = (Math.random() > 0.5) ? 0 : Math.PI/2;
                  if (gameParams.aiRoute !== 'random') {
-                     // Offset start position so they spawn naturally in the correct lane
                      x += Math.cos(angle) * 3.0;
                      z += Math.sin(angle) * 3.0;
                  }
@@ -1269,17 +1282,154 @@ function createBullet(x, y, vx, vy, ownerIndex) {
         return input;
     }
 
+    // --- Minimap & Full Map Renderers ---
+    function drawMinimap(ctx, player, rect) {
+        if (!player) return;
+        ctx.save();
+        ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+        ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+        ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+        ctx.beginPath();
+        ctx.rect(rect.x, rect.y, rect.w, rect.h);
+        ctx.clip();
+
+        const zoom = 1.5; 
+        const pPos = player.body.getPosition();
+        const px = pPos.x;
+        const pz = pPos.y;
+
+        ctx.translate(rect.x + rect.w / 2, rect.y + rect.h / 2);
+        ctx.scale(zoom, zoom);
+        ctx.translate(-px, -pz);
+
+        const viewDist = (Math.max(rect.w, rect.h) / zoom) / 2 + BLOCK_SIZE;
+        ctx.fillStyle = "#333";
+        roadTiles.forEach(t => {
+            if (Math.abs(t.x - px) < viewDist && Math.abs(t.z - pz) < viewDist) {
+                ctx.fillRect(t.x - BLOCK_SIZE/2, t.z - BLOCK_SIZE/2, BLOCK_SIZE, BLOCK_SIZE);
+            }
+        });
+
+        // Draw Player Route Path
+        const path = player === player1 ? p1Path : p2Path;
+        if (path && path.length > 0) {
+            ctx.strokeStyle = 'cyan';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            path.forEach((key, idx) => {
+                const [nx, nz] = key.split(',').map(Number);
+                if (idx === 0) ctx.moveTo(nx, nz);
+                else ctx.lineTo(nx, nz);
+            });
+            ctx.stroke();
+        }
+
+        if (destinationKey) {
+            const [dx, dz] = destinationKey.split(',').map(Number);
+            ctx.fillStyle = 'lime';
+            ctx.beginPath(); ctx.arc(dx, dz, 5, 0, Math.PI*2); ctx.fill();
+        }
+
+        ctx.fillStyle = 'red';
+        trafficPool.forEach(car => {
+            const cPos = car.body.getPosition();
+            if (Math.abs(cPos.x - px) < viewDist && Math.abs(cPos.y - pz) < viewDist) {
+                ctx.beginPath(); ctx.arc(cPos.x, cPos.y, 4, 0, Math.PI*2); ctx.fill();
+            }
+        });
+
+// Draw Player Icon
+        ctx.fillStyle = player === player1 ? '#ffcc00' : '#cc66ff';
+        ctx.save();
+        ctx.translate(px, pz);
+        // FIX: Match the forward vector of the car perfectly (Angle + 180 degrees)
+        ctx.rotate(player.body.getAngle() + Math.PI);
+        ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(-4, 4); ctx.lineTo(4, 4); ctx.fill();
+        ctx.restore();
+
+        ctx.restore();
+    }
+
+    function renderFullMap() {
+        const canvas = document.getElementById('fullMapCanvas');
+        const ctx = canvas.getContext('2d');
+        const rect = canvas.getBoundingClientRect();
+        
+        if (canvas.width !== rect.width || canvas.height !== rect.height) {
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+        }
+        const w = canvas.width;
+        const h = canvas.height;
+        
+        ctx.fillStyle = '#111';
+        ctx.fillRect(0, 0, w, h);
+        
+        ctx.save();
+        ctx.translate(w / 2, h / 2);
+        ctx.scale(mapView.zoom, mapView.zoom);
+        ctx.translate(-mapView.x, -mapView.z);
+        
+        ctx.fillStyle = '#333';
+        roadTiles.forEach(t => {
+            if (Math.abs(t.x - mapView.x)*mapView.zoom < w/2 + BLOCK_SIZE*mapView.zoom &&
+                Math.abs(t.z - mapView.z)*mapView.zoom < h/2 + BLOCK_SIZE*mapView.zoom) {
+                ctx.fillRect(t.x - BLOCK_SIZE/2, t.z - BLOCK_SIZE/2, BLOCK_SIZE, BLOCK_SIZE);
+            }
+        });
+        
+        if (p1Path.length > 0) {
+            ctx.strokeStyle = 'cyan';
+            ctx.lineWidth = 4 / mapView.zoom;
+            ctx.beginPath();
+            p1Path.forEach((key, idx) => {
+                const [nx, nz] = key.split(',').map(Number);
+                if (idx === 0) ctx.moveTo(nx, nz);
+                else ctx.lineTo(nx, nz);
+            });
+            ctx.stroke();
+        }
+        
+        if (destinationKey) {
+            const [dx, dz] = destinationKey.split(',').map(Number);
+            ctx.fillStyle = 'lime';
+            ctx.beginPath(); ctx.arc(dx, dz, 8 / mapView.zoom, 0, Math.PI*2); ctx.fill();
+        }
+        
+        ctx.fillStyle = '#ffcc00';
+        if (player1) {
+            const p = player1.body.getPosition();
+            ctx.beginPath(); ctx.arc(p.x, p.y, 6 / mapView.zoom, 0, Math.PI*2); ctx.fill();
+        }
+        ctx.fillStyle = '#cc66ff';
+        if (player2) {
+            const p = player2.body.getPosition();
+            ctx.beginPath(); ctx.arc(p.x, p.y, 6 / mapView.zoom, 0, Math.PI*2); ctx.fill();
+        }
+        ctx.restore();
+    }
+
     let lastTime = 0;
     function animate(time) {
         requestAnimationFrame(animate);
+        
+        if (!gameActive) return;
+
+        if (isMapOpen) {
+            renderFullMap();
+            return; 
+        }
+
+        if (isPaused) return;
+
         const dt = Math.min((time - lastTime) / 1000, 0.05);
         lastTime = time;
 
         checkDeviceJoins();
 
-        if (!gameActive || isPaused) return;
+        updatePlayerPaths();
 
-        // Process Building lights independently of framerate
         lightManager.update();
 
         if (Math.random() < 0.1) spawnTraffic();
@@ -1326,7 +1476,6 @@ function createBullet(x, y, vx, vy, ownerIndex) {
              }
         }
 
-        // --- Rendering & Split Screen Cameras ---
         const updateCam = (cam, p) => {
             if (!p || !p.mesh) return;
             if(cam.fov !== gameParams.cameraFOV) { cam.fov = gameParams.cameraFOV; cam.updateProjectionMatrix(); }
@@ -1371,32 +1520,42 @@ function createBullet(x, y, vx, vy, ownerIndex) {
             renderer.render(scene, camera1);
         } else {
             renderer.setScissorTest(true);
-            if (gameMode === '2ph') { // Horizontal Split
+            if (gameMode === '2ph') { 
                 camera1.aspect = w / (h / 2); camera1.updateProjectionMatrix();
                 camera2.aspect = w / (h / 2); camera2.updateProjectionMatrix();
                 
-                // P1 Top
                 renderer.setViewport(0, Math.floor(h/2) + 1, w, Math.floor(h/2));
                 renderer.setScissor(0, Math.floor(h/2) + 1, w, Math.floor(h/2));
                 renderer.render(scene, camera1);
 
-                // P2 Bottom
                 renderer.setViewport(0, 0, w, Math.floor(h/2) - 1);
                 renderer.setScissor(0, 0, w, Math.floor(h/2) - 1);
                 renderer.render(scene, camera2);
-            } else { // Vertical Split
+            } else { 
                 camera1.aspect = (w / 2) / h; camera1.updateProjectionMatrix();
                 camera2.aspect = (w / 2) / h; camera2.updateProjectionMatrix();
 
-                // P1 Left
                 renderer.setViewport(0, 0, Math.floor(w/2) - 1, h);
                 renderer.setScissor(0, 0, Math.floor(w/2) - 1, h);
                 renderer.render(scene, camera1);
 
-                // P2 Right
                 renderer.setViewport(Math.floor(w/2) + 1, 0, Math.floor(w/2), h);
                 renderer.setScissor(Math.floor(w/2) + 1, 0, Math.floor(w/2), h);
                 renderer.render(scene, camera2);
+            }
+        }
+
+        // --- Render UI Overlay Layer (Minimaps) ---
+        uiCtx.clearRect(0, 0, w, h);
+        if (numPlayers === 1) {
+            drawMinimap(uiCtx, player1, {x: w - 220, y: 20, w: 200, h: 200});
+        } else {
+            if (gameMode === '2ph') {
+                drawMinimap(uiCtx, player1, {x: w - 220, y: 20, w: 200, h: 200});
+                drawMinimap(uiCtx, player2, {x: w - 220, y: h/2 + 20, w: 200, h: 200});
+            } else {
+                drawMinimap(uiCtx, player1, {x: Math.floor(w/2) - 220, y: 20, w: 200, h: 200});
+                drawMinimap(uiCtx, player2, {x: w - 220, y: 20, w: 200, h: 200});
             }
         }
     }
@@ -1410,13 +1569,21 @@ function createBullet(x, y, vx, vy, ownerIndex) {
         document.getElementById('gameHeader').classList.remove('hidden');
         document.getElementById('hud').classList.remove('hidden');
         document.getElementById('optionsHint').classList.remove('hidden');
+        mapMenu.classList.add('hidden');
         isPaused = false;
+        isMapOpen = false;
+        
+        // Reset Paths
+        destinationKey = null;
+        p1Path = [];
+        p2Path = [];
+        forcePathRecompute = false;
         
         loadAssets().then(() => {
             entities.forEach(e => e.destroy());
             skidMarks.forEach(s => s.destroy());
             entities = []; trafficPool = []; skidMarks = [];
-            intersectionLocks = {}; // Clear previous locks 
+            intersectionLocks = {}; 
             
             if(type === 'default') createCity(); 
             else {
@@ -1486,16 +1653,84 @@ function createBullet(x, y, vx, vy, ownerIndex) {
         helpMenu.classList.add('hidden');
         customizeMenu.classList.add('hidden');
         optionsMenu.classList.add('hidden');
-        if (isHidden) { menu.classList.remove('hidden'); isPaused = true; } 
+        mapMenu.classList.add('hidden');
+        isMapOpen = false;
+
+        if (isHidden) { 
+            menu.classList.remove('hidden'); 
+            isPaused = true; 
+            if (menu === mapMenu) {
+                isMapOpen = true;
+                if (player1) {
+                    const pos = player1.body.getPosition();
+                    mapView.x = pos.x;
+                    mapView.z = pos.y;
+                }
+            }
+        } 
         else { isPaused = false; }
     }
 
+    // --- Full Map Controls ---
+    const mapCanvas = document.getElementById('fullMapCanvas');
+    mapCanvas.addEventListener('mousedown', e => {
+        mapDrag.active = true;
+        mapDrag.startX = e.clientX;
+        mapDrag.startY = e.clientY;
+        mapDrag.lastX = e.clientX;
+        mapDrag.lastY = e.clientY;
+        mapDrag.moved = false;
+    });
+    window.addEventListener('mousemove', e => {
+        if (!mapDrag.active) return;
+        const dx = e.clientX - mapDrag.lastX;
+        const dy = e.clientY - mapDrag.lastY;
+        if (Math.abs(e.clientX - mapDrag.startX) > 3 || Math.abs(e.clientY - mapDrag.startY) > 3) {
+            mapDrag.moved = true;
+        }
+        mapView.x -= dx / mapView.zoom;
+        mapView.z -= dy / mapView.zoom;
+        mapDrag.lastX = e.clientX;
+        mapDrag.lastY = e.clientY;
+    });
+    window.addEventListener('mouseup', e => {
+        if (!mapDrag.active) return;
+        mapDrag.active = false;
+        
+        if (!mapDrag.moved && isMapOpen) {
+            const rect = mapCanvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            
+            const worldX = mapView.x + (mouseX - rect.width/2) / mapView.zoom;
+            const worldZ = mapView.z + (mouseY - rect.height/2) / mapView.zoom;
+            
+            const tileX = Math.round(worldX / BLOCK_SIZE) * BLOCK_SIZE;
+            const tileZ = Math.round(worldZ / BLOCK_SIZE) * BLOCK_SIZE;
+            const key = `${tileX},${tileZ}`;
+            
+            if (roadLookup[key]) {
+                destinationKey = key;
+                forcePathRecompute = true;
+            }
+        }
+    });
+    mapCanvas.addEventListener('wheel', e => {
+        if (!isMapOpen) return;
+        e.preventDefault();
+        const zoomDelta = e.deltaY < 0 ? 1.1 : 0.9;
+        mapView.zoom *= zoomDelta;
+        mapView.zoom = Math.max(0.2, Math.min(mapView.zoom, 10));
+    });
+
     // --- Menus & Inputs ---
+    document.getElementById('mapButton').onclick = () => toggleMenu(mapMenu);
     document.getElementById('customizeButton').onclick = () => toggleMenu(customizeMenu);
     document.getElementById('helpButton').onclick = () => toggleMenu(helpMenu);
     document.querySelector('.close-help').onclick = () => toggleMenu(helpMenu);
     document.querySelector('.close-customize').onclick = () => toggleMenu(customizeMenu);
     document.querySelector('.close-options').onclick = () => toggleMenu(optionsMenu);
+    document.querySelector('.close-map').onclick = () => toggleMenu(mapMenu);
     document.getElementById('newGameButton').onclick = () => location.reload();
     document.getElementById('restartCurrentButton').onclick = () => window.startGameWithMap(currentMapType);
     
@@ -1516,6 +1751,7 @@ function createBullet(x, y, vx, vy, ownerIndex) {
 
     window.addEventListener('keydown', (e) => {
         if (e.repeat) return;
+        if (e.code === 'KeyM') toggleMenu(mapMenu);
         if (e.code === 'KeyC') toggleMenu(customizeMenu);
         if (e.code === 'KeyH') toggleMenu(helpMenu);
         if (e.code === 'KeyO') toggleMenu(optionsMenu);

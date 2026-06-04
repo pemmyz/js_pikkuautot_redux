@@ -51,17 +51,29 @@
         <div id="gameHeader" class="hidden">
             <h1>Pikkuautot 3D</h1>
             <div id="headerButtons">
+                <button id="mapButton">Map (M)</button>
                 <button id="customizeButton">Customize (C)</button>
                 <button id="helpButton">Help (H)</button>
             </div>
         </div>
 
-        <!-- 3D CANVAS -->
+        <!-- 3D CANVAS & 2D UI LAYER (For Minimaps) -->
         <div id="canvas-container"></div>
+        <canvas id="uiCanvas" style="position: absolute; top: 0; left: 0; pointer-events: none; z-index: 5;"></canvas>
 
         <!-- BOTTOM LEFT OPTIONS HINT -->
         <div id="optionsHint" class="bottom-left-hint hidden">
             Press <b>O</b> for Options
+        </div>
+
+        <!-- FULL MAP OVERLAY -->
+        <div id="mapMenu" class="menu-overlay hidden map-container">
+            <div class="map-header">
+                <h2>City Map</h2>
+                <span class="map-hint">Drag to pan, Click to set destination route</span>
+                <button class="close-map">Close (M)</button>
+            </div>
+            <canvas id="fullMapCanvas" class="map-canvas"></canvas>
         </div>
 
         <!-- OPTIONS MENU -->
