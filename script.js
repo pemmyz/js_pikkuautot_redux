@@ -544,6 +544,8 @@ document.addEventListener('DOMContentLoaded', () => {
             this.throttleInput = 0;
             this.steerInput = 0;
             this.handbrakeInput = false;
+            this.isReversing = false;
+            this.autoBraking = false;
 
             this.speed = 0;
             this.vx = 0;
@@ -570,8 +572,54 @@ document.addEventListener('DOMContentLoaded', () => {
             this.handbrakeInput = handbrake;
         }
 
+        drivePlayer(accelerate, brake, handbrake, steer) {
+            this.steerInput = steer;
+            
+            let speed = 0;
+            if (physicsMode === 'old') {
+                speed = Math.abs(this.speed);
+            } else {
+                const velocity = this.body.getLinearVelocity();
+                speed = velocity.length();
+            }
+            
+            const isStopped = speed < 0.3; 
+
+            let targetThrottle = 0;
+            let targetHandbrake = handbrake;
+            let autoBraking = false;
+
+            if (accelerate) {
+                targetThrottle = 1.0;
+                this.isReversing = false;
+            } else if (brake) {
+                if (isStopped || this.isReversing) {
+                    targetThrottle = -0.6; 
+                    this.isReversing = true;
+                } else {
+                    targetHandbrake = true; 
+                    this.isReversing = false;
+                }
+            } else {
+                this.isReversing = false;
+            }
+
+            if (!accelerate && !this.isReversing) {
+                autoBraking = true;
+            }
+
+            this.throttleInput = targetThrottle;
+            this.handbrakeInput = targetHandbrake;
+            this.autoBraking = autoBraking;
+        }
+
         updatePhysicsOld(dt) {
             this.speed *= gameParams.gtaDrag;
+
+            if (this.isPlayer && this.autoBraking && Math.abs(this.speed) > 0.1) {
+                this.speed *= 0.85; 
+            }
+
             const accel = this.power * 0.002;
             if (this.throttleInput !== 0) {
                 const slip = this.handbrakeInput ? 0.3 : 1.0;
@@ -659,7 +707,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 body.applyForce(force, body.getWorldCenter());
             }
 
-            const dragFactor = 0.02 + (Math.abs(lateralVel) * 0.05); 
+            let dragFactor = 0.02 + (Math.abs(lateralVel) * 0.05); 
+            
+            if (this.isPlayer && this.autoBraking && speed > 0.1) {
+                dragFactor += 0.8; 
+            }
+
             const brakeDrag = this.handbrakeInput ? 0.05 : 0;
             const dragForce = velocity.clone().mul(-(dragFactor + brakeDrag) * body.getMass());
             body.applyForce(dragForce, body.getWorldCenter());
@@ -1245,19 +1298,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function getPlayerInput(playerIndex) {
         let dev = playerIndex === 1 ? devices.p1 : devices.p2;
-        let input = { throttle: 0, steer: 0, shoot: false, handbrake: false };
+        let input = { accelerate: false, brake: false, steer: 0, shoot: false, handbrake: false };
         if (!dev) return input;
 
         if (dev === 'kb_arrows') {
-            if (keys['ArrowUp']) input.throttle = 1;
-            if (keys['ArrowDown']) input.throttle = -1;
+            if (keys['ArrowUp']) input.accelerate = true;
+            if (keys['ArrowDown']) input.brake = true;
             if (keys['ArrowLeft']) input.steer = 1;
             if (keys['ArrowRight']) input.steer = -1;
             if (keys['Enter'] || keys['ControlRight']) input.shoot = true;
             if (keys['ShiftRight'] || keys['Space']) input.handbrake = true;
         } else if (dev === 'kb_wasd') {
-            if (keys['KeyW']) input.throttle = 1;
-            if (keys['KeyS']) input.throttle = -1;
+            if (keys['KeyW']) input.accelerate = true;
+            if (keys['KeyS']) input.brake = true;
             if (keys['KeyA']) input.steer = 1;
             if (keys['KeyD']) input.steer = -1;
             if (keys['KeyF'] || keys['ControlLeft']) input.shoot = true;
@@ -1271,8 +1324,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (gp.buttons[14]?.pressed) input.steer = 1;
                 if (gp.buttons[15]?.pressed) input.steer = -1;
 
-                if (gp.buttons[0]?.pressed) input.throttle = 1;
-                if (gp.buttons[6]?.pressed) input.throttle = -1;
+                if (gp.buttons[0]?.pressed) input.accelerate = true;
+                if (gp.buttons[6]?.pressed) input.brake = true;
                 if (gp.buttons[7]?.pressed) input.shoot = true;
                 if (gp.buttons[1]?.pressed || gp.buttons[2]?.pressed) input.handbrake = true;
             }
@@ -1341,7 +1394,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ctx.fillStyle = player === player1 ? '#ffcc00' : '#cc66ff';
         ctx.save();
         ctx.translate(px, pz);
-        // FIX: Match the forward vector of the car perfectly (Angle + 180 degrees)
+        // Match the forward vector of the car (Angle + 180 degrees)
         ctx.rotate(player.body.getAngle() + Math.PI);
         ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(-4, 4); ctx.lineTo(4, 4); ctx.fill();
         ctx.restore();
@@ -1443,13 +1496,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (player1) {
             let i = getPlayerInput(1);
-            player1.drive(i.throttle, i.steer, i.handbrake);
+            player1.drivePlayer(i.accelerate, i.brake, i.handbrake, i.steer);
             if (i.shoot) player1.shoot();
         }
 
         if (player2) {
             let i = getPlayerInput(2);
-            player2.drive(i.throttle, i.steer, i.handbrake);
+            player2.drivePlayer(i.accelerate, i.brake, i.handbrake, i.steer);
             if (i.shoot) player2.shoot();
         }
 
@@ -1871,11 +1924,12 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         };
 
-        // Map Buttons to Arrow Keys
+        // Map Buttons to Arrow Keys / Space Bar
         addControlListener(mobileLeftBtn, 'ArrowLeft');
         addControlListener(mobileRightBtn, 'ArrowRight');
         addControlListener(mobileUpBtn, 'ArrowUp');
         addControlListener(mobileDownBtn, 'ArrowDown');
+        addControlListener(document.getElementById('mobile-handbrake'), 'Space');
     }
 
     setupMobileControls();
