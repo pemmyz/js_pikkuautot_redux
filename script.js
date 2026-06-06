@@ -1362,42 +1362,22 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // Draw Player Route Path
-        const path = player === player1 ? p1Path : p2Path;
-        if (path && path.length > 0) {
-            ctx.strokeStyle = 'cyan';
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            path.forEach((key, idx) => {
-                const [nx, nz] = key.split(',').map(Number);
-                if (idx === 0) ctx.moveTo(nx, nz);
-                else ctx.lineTo(nx, nz);
-            });
-            ctx.stroke();
-        }
-
-        if (destinationKey) {
-            const [dx, dz] = destinationKey.split(',').map(Number);
-            ctx.fillStyle = 'lime';
-            ctx.beginPath(); ctx.arc(dx, dz, 5, 0, Math.PI*2); ctx.fill();
-        }
-
-        ctx.fillStyle = 'red';
-        trafficPool.forEach(car => {
-            const cPos = car.body.getPosition();
-            if (Math.abs(cPos.x - px) < viewDist && Math.abs(cPos.y - pz) < viewDist) {
-                ctx.beginPath(); ctx.arc(cPos.x, cPos.y, 4, 0, Math.PI*2); ctx.fill();
+        // Helper to draw car arrow
+        const drawCarArrow = (car, color) => {
+            const pos = car.body.getPosition();
+            if (Math.abs(pos.x - px) < viewDist && Math.abs(pos.y - pz) < viewDist) {
+                ctx.save();
+                ctx.fillStyle = color;
+                ctx.translate(pos.x, pos.y);
+                ctx.rotate(car.body.getAngle() + Math.PI);
+                ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(-4, 4); ctx.lineTo(4, 4); ctx.fill();
+                ctx.restore();
             }
-        });
+        };
 
-        // Draw Player Icon
-        ctx.fillStyle = player === player1 ? '#ffcc00' : '#cc66ff';
-        ctx.save();
-        ctx.translate(px, pz);
-        // Match the forward vector of the car (Angle + 180 degrees)
-        ctx.rotate(player.body.getAngle() + Math.PI);
-        ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(-4, 4); ctx.lineTo(4, 4); ctx.fill();
-        ctx.restore();
+        trafficPool.forEach(car => drawCarArrow(car, 'red'));
+        if (player1) drawCarArrow(player1, '#ffcc00');
+        if (player2) drawCarArrow(player2, '#cc66ff');
 
         ctx.restore();
     }
@@ -1429,35 +1409,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 ctx.fillRect(t.x - BLOCK_SIZE/2, t.z - BLOCK_SIZE/2, BLOCK_SIZE, BLOCK_SIZE);
             }
         });
+
+        // Draw all cars as arrows
+        const drawFullMapArrow = (car, color) => {
+            const p = car.body.getPosition();
+            ctx.save();
+            ctx.fillStyle = color;
+            ctx.translate(p.x, p.y);
+            ctx.rotate(car.body.getAngle() + Math.PI);
+            ctx.beginPath(); ctx.moveTo(0, -8/mapView.zoom); ctx.lineTo(-6/mapView.zoom, 6/mapView.zoom); ctx.lineTo(6/mapView.zoom, 6/mapView.zoom); ctx.fill();
+            ctx.restore();
+        };
+
+        trafficPool.forEach(c => drawFullMapArrow(c, 'red'));
+        if (player1) drawFullMapArrow(player1, '#ffcc00');
+        if (player2) drawFullMapArrow(player2, '#cc66ff');
         
-        if (p1Path.length > 0) {
-            ctx.strokeStyle = 'cyan';
-            ctx.lineWidth = 4 / mapView.zoom;
-            ctx.beginPath();
-            p1Path.forEach((key, idx) => {
-                const [nx, nz] = key.split(',').map(Number);
-                if (idx === 0) ctx.moveTo(nx, nz);
-                else ctx.lineTo(nx, nz);
-            });
-            ctx.stroke();
-        }
-        
-        if (destinationKey) {
-            const [dx, dz] = destinationKey.split(',').map(Number);
-            ctx.fillStyle = 'lime';
-            ctx.beginPath(); ctx.arc(dx, dz, 8 / mapView.zoom, 0, Math.PI*2); ctx.fill();
-        }
-        
-        ctx.fillStyle = '#ffcc00';
-        if (player1) {
-            const p = player1.body.getPosition();
-            ctx.beginPath(); ctx.arc(p.x, p.y, 6 / mapView.zoom, 0, Math.PI*2); ctx.fill();
-        }
-        ctx.fillStyle = '#cc66ff';
-        if (player2) {
-            const p = player2.body.getPosition();
-            ctx.beginPath(); ctx.arc(p.x, p.y, 6 / mapView.zoom, 0, Math.PI*2); ctx.fill();
-        }
         ctx.restore();
     }
 
