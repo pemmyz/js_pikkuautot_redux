@@ -789,7 +789,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     this.stuckTimer = 0;
                 }
                 
-                if (this.stuckTimer > 4.0 && currentMapType === 'default') this.markedForDeletion = true;
+                // EXTENDED: Automatically marks stuck vehicles for deletion across all maps
+                // preventing persistent invisible/out-of-bounds clipping.
+                if (this.stuckTimer > 5.0) {
+                    this.markedForDeletion = true;
+                }
 
                 if (pl.Vec2.distance(pos, pl.Vec2(tileX, tileZ)) < 8.0 && this.lastDecisionTile !== currentKey) {
                     this.lastDecisionTile = currentKey;
@@ -845,10 +849,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         brake = true;
                         this.stuckTimer = 0; 
                     } else {
+                        // FIXED: Corrected Z-axis target angle logic alignment
                         if (nx > tileX) this.aiTargetAngle = -Math.PI/2;
                         else if (nx < tileX) this.aiTargetAngle = Math.PI/2;
-                        else if (nz > tileZ) this.aiTargetAngle = Math.PI;
-                        else if (nz < tileZ) this.aiTargetAngle = 0;
+                        else if (nz > tileZ) this.aiTargetAngle = 0; // Positive Z
+                        else if (nz < tileZ) this.aiTargetAngle = Math.PI; // Negative Z
                         
                         throttle = 1.0;
 
@@ -885,11 +890,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         makeTurnDecision(cx, cz) {
+            // FIXED: Standardized angles mapped to physical Z coordinates to ensure 
+            // the AI doesn't steer off-road or into buildings on non-A* routes.
             const neighbors = [
-                { dir: 0, x: cx, z: cz - BLOCK_SIZE, angle: 0 },         
-                { dir: 1, x: cx + BLOCK_SIZE, z: cz, angle: -Math.PI/2 },
-                { dir: 2, x: cx, z: cz + BLOCK_SIZE, angle: Math.PI },   
-                { dir: 3, x: cx - BLOCK_SIZE, z: cz, angle: Math.PI/2 }  
+                { dir: 0, x: cx, z: cz - BLOCK_SIZE, angle: Math.PI },   // Going to negative Z
+                { dir: 1, x: cx + BLOCK_SIZE, z: cz, angle: -Math.PI/2 }, // Going to positive X
+                { dir: 2, x: cx, z: cz + BLOCK_SIZE, angle: 0 },         // Going to positive Z
+                { dir: 3, x: cx - BLOCK_SIZE, z: cz, angle: Math.PI/2 }  // Going to negative X
             ];
             const valid = neighbors.filter(n => roadLookup[`${n.x},${n.z}`]);
             if (valid.length === 0) return; 
@@ -1191,13 +1198,15 @@ document.addEventListener('DOMContentLoaded', () => {
                  x = (lane === 0) ? 2.5 : (lane === 1) ? 6.5 : (lane === 2) ? -2.5 : -6.5;
                  angle = x > 0 ? 0 : Math.PI;
                  laneOffset = x;
-             } else {
-                 angle = (Math.random() > 0.5) ? 0 : Math.PI/2;
-                 if (gameParams.aiRoute !== 'random') {
-                     x += Math.cos(angle) * 3.0;
-                     z += Math.sin(angle) * 3.0;
-                 }
-             }
+              } else {
+                  // FIXED: Spawns AI traffic with a minor lateral offset orthogonal to the lane heading 
+                  // to keep them aligned safely on roads without getting caught on boundaries.
+                  angle = (Math.random() > 0.5) ? 0 : Math.PI/2;
+                  if (gameParams.aiRoute !== 'random') {
+                      x += Math.cos(angle + Math.PI/2) * 2.0;
+                      z += Math.sin(angle + Math.PI/2) * 2.0;
+                  }
+              }
 
              const car = new Car(x, z, false, 0, tex, 'straight', laneOffset);
              car.body.setAngle(angle);
@@ -1656,7 +1665,20 @@ document.addEventListener('DOMContentLoaded', () => {
             entities.push(player1); 
             
             if (numPlayers === 2) {
-                player2 = new Car(sx - 10, sz, true, 2, loadedTextures[1]);
+                // FIXED: Robust spawn coordinates for Player 2 that evaluate nearby road tile availability
+                // rather than hardcoding a static offset that pushes them into building/wall collisions.
+                let s2x = sx - 5, s2z = sz;
+                if (type !== 'default' && roadTiles.length > 1) {
+                    const neighbors = roadTiles.filter(t => Math.abs(t.x - sx) <= BLOCK_SIZE && Math.abs(t.z - sz) <= BLOCK_SIZE && (t.x !== sx || t.z !== sz));
+                    if (neighbors.length > 0) {
+                        s2x = neighbors[0].x;
+                        s2z = neighbors[0].z;
+                    } else {
+                        s2x = sx; 
+                        s2z = sz + 3; // Fallback to safe offset on the same tile
+                    }
+                }
+                player2 = new Car(s2x, s2z, true, 2, loadedTextures[1]);
                 entities.push(player2);
                 document.getElementById('p2Score').style.display = 'block';
             } else {
