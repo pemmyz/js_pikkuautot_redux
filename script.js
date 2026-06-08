@@ -45,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
         playerSpeed: 300, // Player Speed Scalar
         enemySpeed: 60,   // AI Normal Speed
         trafficCount: 40, 
-        spawnRadius: 120,
+        spawnRadius: 200, // Increased to keep cars alive longer when off-screen
         simpleMaterials: false, 
         particlesEnabled: true,
         headlightsEnabled: false,
@@ -99,7 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x222222);
-    scene.fog = new THREE.Fog(0x222222, 50, 160); 
+    scene.fog = new THREE.Fog(0x222222, 100, 300); // Pushed fog depth back so cars don't fade into the background early
 
     const camera1 = new THREE.PerspectiveCamera(gameParams.cameraFOV, BASE_WIDTH / BASE_HEIGHT, 0.1, 1000);
     camera1.position.set(0, gameParams.cameraHeight, 30); 
@@ -493,7 +493,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const mesh = new THREE.Mesh(geometry, material);
             mesh.castShadow = true;
             mesh.rotation.x = -Math.PI / 2; 
+            mesh.frustumCulled = false; // Prevent culling to allow off-screen indicators and keep visible far away
+
             const containerMesh = new THREE.Group(); 
+            containerMesh.frustumCulled = false; // Prevent culling
             containerMesh.add(mesh);
 
             if (gameParams.headlightsEnabled) {
@@ -1342,7 +1345,74 @@ document.addEventListener('DOMContentLoaded', () => {
         return input;
     }
 
-    // --- Minimap & Full Map Renderers ---
+    // --- Minimap, Full Map Renderers & Edge Indicators ---
+    function drawEdgeIndicators(ctx, camera, rect, player) {
+        if (!player) return;
+        const frustum = new THREE.Frustum();
+        const projScreenMatrix = new THREE.Matrix4();
+        projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+        frustum.setFromProjectionMatrix(projScreenMatrix);
+
+        ctx.save();
+        trafficPool.forEach(car => {
+            if(!car.mesh || car.markedForDeletion) return;
+            const pos = car.mesh.position.clone();
+            
+            // If the car is visible in the camera view, no indicator needed
+            if (frustum.containsPoint(pos)) return;
+
+            pos.project(camera); 
+
+            let x = (pos.x * 0.5 + 0.5) * rect.w + rect.x;
+            let y = (-(pos.y * 0.5) + 0.5) * rect.h + rect.y;
+
+            if (pos.z > 1) { 
+                x = rect.x + rect.w - (x - rect.x);
+                y = rect.y + rect.h; // pin to bottom if behind
+            }
+
+            const pad = 20;
+            const minX = rect.x + pad;
+            const maxX = rect.x + rect.w - pad;
+            const minY = rect.y + pad;
+            const maxY = rect.y + rect.h - pad;
+
+            let drawX = x;
+            let drawY = y;
+            let clamped = false;
+
+            if (drawX < minX) { drawX = minX; clamped = true; }
+            if (drawX > maxX) { drawX = maxX; clamped = true; }
+            if (drawY < minY) { drawY = minY; clamped = true; }
+            if (drawY > maxY) { drawY = maxY; clamped = true; }
+            if (pos.z > 1) clamped = true;
+
+            // Draw a pointer arrow on the edge of the screen
+            if (clamped) {
+                ctx.save();
+                ctx.translate(drawX, drawY);
+                const cx = rect.x + rect.w / 2;
+                const cy = rect.y + rect.h / 2;
+                const angle = Math.atan2(drawY - cy, drawX - cx);
+                ctx.rotate(angle);
+                
+                ctx.beginPath();
+                ctx.moveTo(10, 0);
+                ctx.lineTo(-6, 8);
+                ctx.lineTo(-2, 0);
+                ctx.lineTo(-6, -8);
+                ctx.closePath();
+                ctx.fillStyle = 'rgba(255, 50, 50, 0.7)';
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+                ctx.restore();
+            }
+        });
+        ctx.restore();
+    }
+
     function drawMinimap(ctx, player, rect) {
         if (!player) return;
         ctx.save();
@@ -1573,15 +1643,20 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        // --- Render UI Overlay Layer (Minimaps) ---
+        // --- Render UI Overlay Layer (Minimaps & Indicators) ---
         uiCtx.clearRect(0, 0, w, h);
         if (numPlayers === 1) {
+            drawEdgeIndicators(uiCtx, camera1, {x:0, y:0, w:w, h:h}, player1);
             drawMinimap(uiCtx, player1, {x: w - 220, y: 20, w: 200, h: 200});
         } else {
             if (gameMode === '2ph') {
+                drawEdgeIndicators(uiCtx, camera1, {x:0, y:0, w:w, h:Math.floor(h/2)}, player1);
+                drawEdgeIndicators(uiCtx, camera2, {x:0, y:Math.floor(h/2), w:w, h:Math.floor(h/2)}, player2);
                 drawMinimap(uiCtx, player1, {x: w - 220, y: 20, w: 200, h: 200});
                 drawMinimap(uiCtx, player2, {x: w - 220, y: h/2 + 20, w: 200, h: 200});
             } else {
+                drawEdgeIndicators(uiCtx, camera1, {x:0, y:0, w:Math.floor(w/2), h:h}, player1);
+                drawEdgeIndicators(uiCtx, camera2, {x:Math.floor(w/2), y:0, w:Math.floor(w/2), h:h}, player2);
                 drawMinimap(uiCtx, player1, {x: Math.floor(w/2) - 220, y: 20, w: 200, h: 200});
                 drawMinimap(uiCtx, player2, {x: w - 220, y: 20, w: 200, h: 200});
             }
