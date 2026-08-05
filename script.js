@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let mapView = { x: 0, z: 0, zoom: 2 };
     let mapDrag = { active: false, startX: 0, startY: 0, lastX: 0, lastY: 0, moved: false };
     let destinationKey = null;
+    let destinationCoord = null; // Stores the exact clicked spot for instant rendering
     let forcePathRecompute = false;
     let p1Path = [];
     let p2Path = [];
@@ -214,6 +215,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 const path = aStar(currentKey, destinationKey);
                 if (index === 0) p1Path = path;
                 else p2Path = path;
+            }
+
+            // Auto clear destination when reached
+            if (currentKey === destinationKey) {
+                destinationKey = null;
+                destinationCoord = null;
+                p1Path = [];
+                p2Path = [];
             }
         });
         forcePathRecompute = false;
@@ -1441,6 +1450,41 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
+        // --- DRAW MINIMAP GPS ROUTE ---
+        const activePath = (player === player1) ? p1Path : p2Path;
+        if (activePath && activePath.length > 0) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(180, 50, 255, 0.8)'; // GTA style purple
+            ctx.lineWidth = 4 / zoom; 
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            
+            activePath.forEach((key, index) => {
+                const [nx, nz] = key.split(',').map(Number);
+                if (index === 0) ctx.moveTo(nx, nz);
+                else ctx.lineTo(nx, nz);
+            });
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // --- DRAW DESTINATION MARKER (Minimap) ---
+        if (destinationCoord) {
+            ctx.save();
+            ctx.fillStyle = '#ffcc00';
+            ctx.beginPath();
+            // Divide radius by zoom so it stays the same screen size as the cars
+            ctx.arc(destinationCoord.x, destinationCoord.z, 6 / zoom, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Add a subtle black outline for contrast
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 1.5 / zoom;
+            ctx.stroke();
+            ctx.restore();
+        }
+
         // Helper to draw car arrow
         const drawCarArrow = (car, color) => {
             const pos = car.body.getPosition();
@@ -1488,6 +1532,40 @@ document.addEventListener('DOMContentLoaded', () => {
                 ctx.fillRect(t.x - BLOCK_SIZE/2, t.z - BLOCK_SIZE/2, BLOCK_SIZE, BLOCK_SIZE);
             }
         });
+
+        // --- DRAW GTA GPS ROUTE ---
+        if (p1Path && p1Path.length > 0) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(180, 50, 255, 0.8)'; // GTA style purple line
+            ctx.lineWidth = 8 / mapView.zoom; // Scale width with zoom
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            
+            p1Path.forEach((key, index) => {
+                const [x, z] = key.split(',').map(Number);
+                if (index === 0) ctx.moveTo(x, z);
+                else ctx.lineTo(x, z);
+            });
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // --- DRAW DESTINATION MARKER (Full Map) ---
+        if (destinationCoord) {
+            ctx.save();
+            ctx.fillStyle = '#ffcc00';
+            ctx.beginPath();
+            // Divide radius by zoom so it stays the same screen size as the cars
+            ctx.arc(destinationCoord.x, destinationCoord.z, 6 / mapView.zoom, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Add a subtle black outline for contrast
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 1.5 / mapView.zoom;
+            ctx.stroke();
+            ctx.restore();
+        }
 
         // Draw all cars as arrows
         const drawFullMapArrow = (car, color) => {
@@ -1678,6 +1756,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Reset Paths
         destinationKey = null;
+        destinationCoord = null;
         p1Path = [];
         p2Path = [];
         forcePathRecompute = false;
@@ -1809,28 +1888,36 @@ document.addEventListener('DOMContentLoaded', () => {
         mapDrag.lastX = e.clientX;
         mapDrag.lastY = e.clientY;
     });
+    
     window.addEventListener('mouseup', e => {
         if (!mapDrag.active) return;
         mapDrag.active = false;
+    });
+
+    // NEW: Double-click to set GPS Route
+    mapCanvas.addEventListener('dblclick', e => {
+        if (!isMapOpen) return;
         
-        if (!mapDrag.moved && isMapOpen) {
-            const rect = mapCanvas.getBoundingClientRect();
-            const mouseX = e.clientX - rect.left;
-            const mouseY = e.clientY - rect.top;
-            
-            const worldX = mapView.x + (mouseX - rect.width/2) / mapView.zoom;
-            const worldZ = mapView.z + (mouseY - rect.height/2) / mapView.zoom;
-            
-            const tileX = Math.round(worldX / BLOCK_SIZE) * BLOCK_SIZE;
-            const tileZ = Math.round(worldZ / BLOCK_SIZE) * BLOCK_SIZE;
-            const key = `${tileX},${tileZ}`;
-            
-            if (roadLookup[key]) {
-                destinationKey = key;
-                forcePathRecompute = true;
-            }
+        const rect = mapCanvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        // Calculate where in the 3D world we clicked
+        const worldX = mapView.x + (mouseX - rect.width/2) / mapView.zoom;
+        const worldZ = mapView.z + (mouseY - rect.height/2) / mapView.zoom;
+        
+        // Snap to the nearest road tile
+        const tileX = Math.round(worldX / BLOCK_SIZE) * BLOCK_SIZE;
+        const tileZ = Math.round(worldZ / BLOCK_SIZE) * BLOCK_SIZE;
+        const key = `${tileX},${tileZ}`;
+        
+        if (roadLookup[key]) {
+            destinationKey = key;
+            destinationCoord = { x: tileX, z: tileZ }; // Save spot immediately
+            forcePathRecompute = true;
         }
     });
+
     mapCanvas.addEventListener('wheel', e => {
         if (!isMapOpen) return;
         e.preventDefault();
