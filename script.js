@@ -46,7 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
         playerSpeed: 300, // Player Speed Scalar
         enemySpeed: 60,   // AI Normal Speed
         trafficCount: 40, 
-        spawnRadius: 200, // Increased to keep cars alive longer when off-screen
+        spawnRadius: 200, // Keep cars alive longer when off-screen
         simpleMaterials: false, 
         particlesEnabled: true,
         headlightsEnabled: false,
@@ -89,6 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderer.setSize(BASE_WIDTH, BASE_HEIGHT);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputEncoding = THREE.sRGBEncoding;
     
     if (document.getElementById('lowResToggle') && document.getElementById('lowResToggle').checked) {
         renderer.setPixelRatio(0.5);
@@ -100,7 +101,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x222222);
-    scene.fog = new THREE.Fog(0x222222, 100, 300); // Pushed fog depth back so cars don't fade into the background early
+    scene.fog = new THREE.Fog(0x222222, 100, 300);
 
     const camera1 = new THREE.PerspectiveCamera(gameParams.cameraFOV, BASE_WIDTH / BASE_HEIGHT, 0.1, 1000);
     camera1.position.set(0, gameParams.cameraHeight, 30); 
@@ -120,7 +121,10 @@ document.addEventListener('DOMContentLoaded', () => {
     dirLight.castShadow = true;
     dirLight.shadow.mapSize.width = 2048;
     dirLight.shadow.mapSize.height = 2048;
-    const d = 100;
+    dirLight.shadow.camera.near = 0.5;
+    dirLight.shadow.camera.far = 300;
+    dirLight.shadow.bias = -0.0005;
+    const d = 150;
     dirLight.shadow.camera.left = -d;
     dirLight.shadow.camera.right = d;
     dirLight.shadow.camera.top = d;
@@ -137,7 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let mapGrid = [];
     let roadTiles = []; 
     let roadLookup = {}; 
-    let skidMarks = []; // Array to manage tire marks
+    let skidMarks = []; 
     let skidTexture = null;
 
     // --- UI Canvas Setup ---
@@ -147,7 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const uiCtx = uiCanvas.getContext('2d');
 
     // --- PATHFINDING & INTERSECTION GLOBALS ---
-    let intersectionLocks = {}; // Locks "x,z" coordinates to a specific Car object
+    let intersectionLocks = {};
 
     function getNeighbors(nodeKey) {
         const [x, z] = nodeKey.split(',').map(Number);
@@ -167,7 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const gScore = { [startKey]: 0 };
         const fScore = { [startKey]: heuristic(startKey, goalKey) };
         let iter = 0;
-        const MAX_ITER = 1500; // Hard cap against infinite path finding on isolated maps
+        const MAX_ITER = 1500;
 
         while (openSet.length > 0 && iter++ < MAX_ITER) {
             openSet.sort((a, b) => fScore[a] - fScore[b]);
@@ -198,7 +202,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return []; 
     }
     
-    // Updates the planned routes visually
     function updatePlayerPaths() {
         if (!destinationKey) return;
         
@@ -209,7 +212,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const tileZ = Math.round(pos.y / BLOCK_SIZE) * BLOCK_SIZE;
             const currentKey = `${tileX},${tileZ}`;
             
-            // Recompute if forced (destination changed) or if moved to a new map node
             if (forcePathRecompute || p.lastPathKey !== currentKey) {
                 p.lastPathKey = currentKey;
                 const path = aStar(currentKey, destinationKey);
@@ -217,7 +219,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 else p2Path = path;
             }
 
-            // Auto clear destination when reached
             if (currentKey === destinationKey) {
                 destinationKey = null;
                 destinationCoord = null;
@@ -262,7 +263,7 @@ document.addEventListener('DOMContentLoaded', () => {
             this.texture.wrapT = THREE.RepeatWrapping;
             this.texture.magFilter = THREE.NearestFilter;
             this.texture.minFilter = THREE.LinearFilter;
-            this.texture.colorSpace = THREE.SRGBColorSpace;
+            this.texture.encoding = THREE.sRGBEncoding;
             
             this.textureInstances = []; 
             this.draw();
@@ -374,7 +375,7 @@ document.addEventListener('DOMContentLoaded', () => {
         tex.wrapT = THREE.RepeatWrapping;
         tex.magFilter = THREE.NearestFilter;
         tex.minFilter = THREE.LinearFilter;
-        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.encoding = THREE.sRGBEncoding;
         return tex;
     }
 
@@ -390,7 +391,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 textureLoader.load(path, (tex) => { 
                     tex.magFilter = THREE.NearestFilter;
                     tex.minFilter = THREE.NearestFilter;
-                    tex.colorSpace = THREE.SRGBColorSpace;
+                    tex.encoding = THREE.sRGBEncoding;
                     loadedTextures.push(tex); 
                     resolve(); 
                 }, undefined, () => {
@@ -400,6 +401,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     ctx.fillStyle='#000'; ctx.fillRect(10,10,44,20);
                     const t = new THREE.CanvasTexture(c);
                     t.magFilter = THREE.NearestFilter;
+                    t.encoding = THREE.sRGBEncoding;
                     loadedTextures.push(t);
                     resolve();
                 });
@@ -494,18 +496,19 @@ document.addEventListener('DOMContentLoaded', () => {
             
             let material;
             if (gameParams.simpleMaterials) {
-                material = new THREE.MeshLambertMaterial({ map: texture, transparent: true, alphaTest: 0.5 });
+                material = new THREE.MeshLambertMaterial({ map: texture, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
             } else {
-                material = new THREE.MeshStandardMaterial({ map: texture, transparent: true, alphaTest: 0.5, roughness: 0.5 });
+                material = new THREE.MeshStandardMaterial({ map: texture, transparent: true, alphaTest: 0.5, roughness: 0.5, side: THREE.DoubleSide });
             }
 
             const mesh = new THREE.Mesh(geometry, material);
             mesh.castShadow = true;
+            mesh.receiveShadow = true;
             mesh.rotation.x = -Math.PI / 2; 
-            mesh.frustumCulled = false; // Prevent culling to allow off-screen indicators and keep visible far away
+            mesh.frustumCulled = false; 
 
             const containerMesh = new THREE.Group(); 
-            containerMesh.frustumCulled = false; // Prevent culling
+            containerMesh.frustumCulled = false; 
             containerMesh.add(mesh);
 
             if (gameParams.headlightsEnabled) {
@@ -563,7 +566,7 @@ document.addEventListener('DOMContentLoaded', () => {
             this.vx = 0;
             this.vy = 0;
             
-            this.lastPathKey = null; // Used for dynamic path recalculation
+            this.lastPathKey = null;
         }
 
         update(dt) {
@@ -801,8 +804,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     this.stuckTimer = 0;
                 }
                 
-                // EXTENDED: Automatically marks stuck vehicles for deletion across all maps
-                // preventing persistent invisible/out-of-bounds clipping.
                 if (this.stuckTimer > 5.0) {
                     this.markedForDeletion = true;
                 }
@@ -861,11 +862,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         brake = true;
                         this.stuckTimer = 0; 
                     } else {
-                        // FIXED: Corrected Z-axis target angle logic alignment
                         if (nx > tileX) this.aiTargetAngle = -Math.PI/2;
                         else if (nx < tileX) this.aiTargetAngle = Math.PI/2;
-                        else if (nz > tileZ) this.aiTargetAngle = 0; // Positive Z
-                        else if (nz < tileZ) this.aiTargetAngle = Math.PI; // Negative Z
+                        else if (nz > tileZ) this.aiTargetAngle = 0; 
+                        else if (nz < tileZ) this.aiTargetAngle = Math.PI; 
                         
                         throttle = 1.0;
 
@@ -902,13 +902,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         makeTurnDecision(cx, cz) {
-            // FIXED: Standardized angles mapped to physical Z coordinates to ensure 
-            // the AI doesn't steer off-road or into buildings on non-A* routes.
             const neighbors = [
-                { dir: 0, x: cx, z: cz - BLOCK_SIZE, angle: Math.PI },   // Going to negative Z
-                { dir: 1, x: cx + BLOCK_SIZE, z: cz, angle: -Math.PI/2 }, // Going to positive X
-                { dir: 2, x: cx, z: cz + BLOCK_SIZE, angle: 0 },         // Going to positive Z
-                { dir: 3, x: cx - BLOCK_SIZE, z: cz, angle: Math.PI/2 }  // Going to negative X
+                { dir: 0, x: cx, z: cz - BLOCK_SIZE, angle: Math.PI },   
+                { dir: 1, x: cx + BLOCK_SIZE, z: cz, angle: -Math.PI/2 }, 
+                { dir: 2, x: cx, z: cz + BLOCK_SIZE, angle: 0 },         
+                { dir: 3, x: cx - BLOCK_SIZE, z: cz, angle: Math.PI/2 }  
             ];
             const valid = neighbors.filter(n => roadLookup[`${n.x},${n.z}`]);
             if (valid.length === 0) return; 
@@ -969,7 +967,6 @@ document.addEventListener('DOMContentLoaded', () => {
             this.shootCooldown = 0.2;
         }
     }
-
 
     function createBullet(x, y, vx, vy, ownerIndex) {
         const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
@@ -1054,7 +1051,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const bMesh = new THREE.Mesh(boxGeo, materials);
             bMesh.position.set(x, h/2, z);
             bMesh.scale.set(w, h, w);
-            bMesh.castShadow = true; bMesh.receiveShadow = true;
+            bMesh.castShadow = true; 
+            bMesh.receiveShadow = true;
             scene.add(bMesh);
             chunk.meshes.push(bMesh);
             const body = world.createBody(pl.Vec2(x, z));
@@ -1211,8 +1209,6 @@ document.addEventListener('DOMContentLoaded', () => {
                  angle = x > 0 ? 0 : Math.PI;
                  laneOffset = x;
               } else {
-                  // FIXED: Spawns AI traffic with a minor lateral offset orthogonal to the lane heading 
-                  // to keep them aligned safely on roads without getting caught on boundaries.
                   angle = (Math.random() > 0.5) ? 0 : Math.PI/2;
                   if (gameParams.aiRoute !== 'random') {
                       x += Math.cos(angle + Math.PI/2) * 2.0;
@@ -1263,8 +1259,8 @@ document.addEventListener('DOMContentLoaded', () => {
     window.setGameMode = function(mode) {
         gameMode = mode;
         document.getElementById('btnMode1P').classList.toggle('active', mode === '1p');
-        document.getElementById('btnMode2PV').classList.toggle('active', mode === '2pv');
         document.getElementById('btnMode2PH').classList.toggle('active', mode === '2ph');
+        document.getElementById('btnMode2PV').classList.toggle('active', mode === '2pv');
         numPlayers = mode === '1p' ? 1 : 2;
         document.getElementById('p2DeviceSlot').style.display = numPlayers === 2 ? 'block' : 'none';
     };
@@ -1367,7 +1363,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if(!car.mesh || car.markedForDeletion) return;
             const pos = car.mesh.position.clone();
             
-            // If the car is visible in the camera view, no indicator needed
             if (frustum.containsPoint(pos)) return;
 
             pos.project(camera); 
@@ -1377,7 +1372,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (pos.z > 1) { 
                 x = rect.x + rect.w - (x - rect.x);
-                y = rect.y + rect.h; // pin to bottom if behind
+                y = rect.y + rect.h; 
             }
 
             const pad = 20;
@@ -1396,7 +1391,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (drawY > maxY) { drawY = maxY; clamped = true; }
             if (pos.z > 1) clamped = true;
 
-            // Draw a pointer arrow on the edge of the screen
             if (clamped) {
                 ctx.save();
                 ctx.translate(drawX, drawY);
@@ -1450,11 +1444,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // --- DRAW MINIMAP GPS ROUTE ---
         const activePath = (player === player1) ? p1Path : p2Path;
         if (activePath && activePath.length > 0) {
             ctx.save();
-            ctx.strokeStyle = 'rgba(180, 50, 255, 0.8)'; // GTA style purple
+            ctx.strokeStyle = 'rgba(180, 50, 255, 0.8)';
             ctx.lineWidth = 4 / zoom; 
             ctx.lineJoin = 'round';
             ctx.lineCap = 'round';
@@ -1469,23 +1462,19 @@ document.addEventListener('DOMContentLoaded', () => {
             ctx.restore();
         }
 
-        // --- DRAW DESTINATION MARKER (Minimap) ---
         if (destinationCoord) {
             ctx.save();
             ctx.fillStyle = '#ffcc00';
             ctx.beginPath();
-            // Divide radius by zoom so it stays the same screen size as the cars
             ctx.arc(destinationCoord.x, destinationCoord.z, 6 / zoom, 0, Math.PI * 2);
             ctx.fill();
             
-            // Add a subtle black outline for contrast
             ctx.strokeStyle = '#000000';
             ctx.lineWidth = 1.5 / zoom;
             ctx.stroke();
             ctx.restore();
         }
 
-        // Helper to draw car arrow
         const drawCarArrow = (car, color) => {
             const pos = car.body.getPosition();
             if (Math.abs(pos.x - px) < viewDist && Math.abs(pos.y - pz) < viewDist) {
@@ -1533,11 +1522,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // --- DRAW GTA GPS ROUTE ---
         if (p1Path && p1Path.length > 0) {
             ctx.save();
-            ctx.strokeStyle = 'rgba(180, 50, 255, 0.8)'; // GTA style purple line
-            ctx.lineWidth = 8 / mapView.zoom; // Scale width with zoom
+            ctx.strokeStyle = 'rgba(180, 50, 255, 0.8)';
+            ctx.lineWidth = 8 / mapView.zoom;
             ctx.lineJoin = 'round';
             ctx.lineCap = 'round';
             ctx.beginPath();
@@ -1551,23 +1539,19 @@ document.addEventListener('DOMContentLoaded', () => {
             ctx.restore();
         }
 
-        // --- DRAW DESTINATION MARKER (Full Map) ---
         if (destinationCoord) {
             ctx.save();
             ctx.fillStyle = '#ffcc00';
             ctx.beginPath();
-            // Divide radius by zoom so it stays the same screen size as the cars
             ctx.arc(destinationCoord.x, destinationCoord.z, 6 / mapView.zoom, 0, Math.PI * 2);
             ctx.fill();
             
-            // Add a subtle black outline for contrast
             ctx.strokeStyle = '#000000';
             ctx.lineWidth = 1.5 / mapView.zoom;
             ctx.stroke();
             ctx.restore();
         }
 
-        // Draw all cars as arrows
         const drawFullMapArrow = (car, color) => {
             const p = car.body.getPosition();
             ctx.save();
@@ -1677,10 +1661,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (player1) updateCam(camera1, player1);
         if (player2) updateCam(camera2, player2);
 
-        if (player1 && player1.mesh) {
-            dirLight.position.x = player1.mesh.position.x + 50;
-            dirLight.position.z = player1.mesh.position.z + 50;
-            dirLight.target.position.set(player1.mesh.position.x, 0, player1.mesh.position.z);
+        const focusPlayer = player1 || player2;
+        if (focusPlayer && focusPlayer.mesh) {
+            dirLight.position.x = focusPlayer.mesh.position.x + 50;
+            dirLight.position.z = focusPlayer.mesh.position.z + 50;
+            dirLight.target.position.set(focusPlayer.mesh.position.x, 0, focusPlayer.mesh.position.z);
             dirLight.target.updateMatrixWorld();
         }
 
@@ -1721,7 +1706,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        // --- Render UI Overlay Layer (Minimaps & Indicators) ---
+        // --- Render UI Overlay Layer ---
         uiCtx.clearRect(0, 0, w, h);
         if (numPlayers === 1) {
             drawEdgeIndicators(uiCtx, camera1, {x:0, y:0, w:w, h:h}, player1);
@@ -1754,7 +1739,6 @@ document.addEventListener('DOMContentLoaded', () => {
         isPaused = false;
         isMapOpen = false;
         
-        // Reset Paths
         destinationKey = null;
         destinationCoord = null;
         p1Path = [];
@@ -1782,6 +1766,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const pm = gameParams.simpleMaterials ? new THREE.MeshLambertMaterial({map: roadTex}) : new THREE.MeshStandardMaterial({map: roadTex});
                 const g = new THREE.Mesh(pg, pm);
                 g.rotation.x = -Math.PI/2; g.position.y = -0.1;
+                g.receiveShadow = true;
                 scene.add(g);
 
                 const boxGeo = new THREE.BoxGeometry(1,1,1);
@@ -1819,8 +1804,6 @@ document.addEventListener('DOMContentLoaded', () => {
             entities.push(player1); 
             
             if (numPlayers === 2) {
-                // FIXED: Robust spawn coordinates for Player 2 that evaluate nearby road tile availability
-                // rather than hardcoding a static offset that pushes them into building/wall collisions.
                 let s2x = sx - 5, s2z = sz;
                 if (type !== 'default' && roadTiles.length > 1) {
                     const neighbors = roadTiles.filter(t => Math.abs(t.x - sx) <= BLOCK_SIZE && Math.abs(t.z - sz) <= BLOCK_SIZE && (t.x !== sx || t.z !== sz));
@@ -1829,7 +1812,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         s2z = neighbors[0].z;
                     } else {
                         s2x = sx; 
-                        s2z = sz + 3; // Fallback to safe offset on the same tile
+                        s2z = sz + 3; 
                     }
                 }
                 player2 = new Car(s2x, s2z, true, 2, loadedTextures[1]);
@@ -1889,12 +1872,11 @@ document.addEventListener('DOMContentLoaded', () => {
         mapDrag.lastY = e.clientY;
     });
     
-    window.addEventListener('mouseup', e => {
+    window.addEventListener('mouseup', () => {
         if (!mapDrag.active) return;
         mapDrag.active = false;
     });
 
-    // NEW: Double-click to set GPS Route
     mapCanvas.addEventListener('dblclick', e => {
         if (!isMapOpen) return;
         
@@ -1902,18 +1884,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const mouseX = e.clientX - rect.left;
         const mouseY = e.clientY - rect.top;
         
-        // Calculate where in the 3D world we clicked
         const worldX = mapView.x + (mouseX - rect.width/2) / mapView.zoom;
         const worldZ = mapView.z + (mouseY - rect.height/2) / mapView.zoom;
         
-        // Snap to the nearest road tile
         const tileX = Math.round(worldX / BLOCK_SIZE) * BLOCK_SIZE;
         const tileZ = Math.round(worldZ / BLOCK_SIZE) * BLOCK_SIZE;
         const key = `${tileX},${tileZ}`;
         
         if (roadLookup[key]) {
             destinationKey = key;
-            destinationCoord = { x: tileX, z: tileZ }; // Save spot immediately
+            destinationCoord = { x: tileX, z: tileZ };
             forcePathRecompute = true;
         }
     });
@@ -1926,7 +1906,7 @@ document.addEventListener('DOMContentLoaded', () => {
         mapView.zoom = Math.max(0.2, Math.min(mapView.zoom, 10));
     });
 
-    // --- Menus & Inputs ---
+    // --- Menus & Inputs Binding ---
     document.getElementById('mapButton').onclick = () => toggleMenu(mapMenu);
     document.getElementById('customizeButton').onclick = () => toggleMenu(customizeMenu);
     document.getElementById('helpButton').onclick = () => toggleMenu(helpMenu);
@@ -2001,7 +1981,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement;
 
         if (isFullscreen) {
-            // Fullscreen / Mobile Mode: Lock to fixed resolution and scale via CSS
             const scale = Math.min(
                 window.innerWidth / BASE_WIDTH,
                 window.innerHeight / BASE_HEIGHT
@@ -2017,7 +1996,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 uiCanvas.height = BASE_HEIGHT;
             }
         } else {
-            // Desktop Mode: Scale the game area fluidly to the browser window
             screenElement.style.width = '100vw';
             screenElement.style.height = '100vh';
             screenElement.style.transform = 'none'; 
@@ -2040,7 +2018,6 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener("fullscreenchange", scaleGame);
     window.addEventListener("webkitfullscreenchange", scaleGame);
     
-    // Initial check
     scaleGame();
     
     if (mobileToggleBtn) {
@@ -2050,7 +2027,6 @@ document.addEventListener('DOMContentLoaded', () => {
     function setupMobileControls() {
         if (!mobileControls) return;
 
-        // Helper to map touch/mouse events to keys
         const addControlListener = (element, keyCode) => {
             if (!element) return;
             const pressKey = (e) => {
@@ -2062,12 +2038,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 keys[keyCode] = false;
             };
 
-            // Touch Events
             element.addEventListener('touchstart', pressKey, { passive: false });
             element.addEventListener('touchend', releaseKey, { passive: false });
             element.addEventListener('touchcancel', releaseKey, { passive: false });
             
-            // Mouse Events
             element.addEventListener('mousedown', pressKey);
             element.addEventListener('mouseup', releaseKey);
             element.addEventListener('mouseleave', (e) => {
@@ -2075,7 +2049,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         };
 
-        // Map Buttons to Arrow Keys / Space Bar
         addControlListener(mobileLeftBtn, 'ArrowLeft');
         addControlListener(mobileRightBtn, 'ArrowRight');
         addControlListener(mobileUpBtn, 'ArrowUp');
