@@ -50,6 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
         simpleMaterials: false, 
         particlesEnabled: true,
         headlightsEnabled: false,
+        shadowMode: 'high', // 'off', 'simple', 'high'
         bulletGlow: false,
         cameraHeight: 60,
         cameraFOV: 50,
@@ -130,6 +131,49 @@ document.addEventListener('DOMContentLoaded', () => {
     dirLight.shadow.camera.top = d;
     dirLight.shadow.camera.bottom = -d;
     scene.add(dirLight);
+
+    // --- SHADOW QUALITY SYSTEM ---
+    function setShadowMode(mode) {
+        gameParams.shadowMode = mode;
+        
+        // Keep main menu and customize dropdowns in sync
+        const mainSel = document.getElementById('mainShadowSelect');
+        const custSel = document.getElementById('custShadowSelect');
+        if (mainSel && mainSel.value !== mode) mainSel.value = mode;
+        if (custSel && custSel.value !== mode) custSel.value = mode;
+
+        if (mode === 'off') {
+            dirLight.castShadow = false;
+            renderer.shadowMap.enabled = false;
+            if (dirLight.shadow.map) renderer.clearTarget(dirLight.shadow.map);
+        } else if (mode === 'simple') {
+            dirLight.castShadow = true;
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.BasicShadowMap; // Pixelated, faster
+            
+            if (dirLight.shadow.map) {
+                dirLight.shadow.map.dispose();
+                dirLight.shadow.map = null;
+            }
+            dirLight.shadow.mapSize.width = 512;
+            dirLight.shadow.mapSize.height = 512;
+            dirLight.shadow.bias = -0.001;
+            renderer.shadowMap.needsUpdate = true;
+        } else if (mode === 'high') {
+            dirLight.castShadow = true;
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Soft, smooth
+            
+            if (dirLight.shadow.map) {
+                dirLight.shadow.map.dispose();
+                dirLight.shadow.map = null;
+            }
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            dirLight.shadow.bias = -0.0005;
+            renderer.shadowMap.needsUpdate = true;
+        }
+    }
 
     // --- PLANCK.JS Setup ---
     const world = pl.World(pl.Vec2(0, 0)); 
@@ -1940,11 +1984,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.code === 'KeyO') toggleMenu(optionsMenu);
     });
 
-    document.getElementById('shadowsToggle').onchange = (e) => {
-        dirLight.castShadow = e.target.checked;
-        renderer.shadowMap.autoUpdate = e.target.checked;
-        if(!e.target.checked) renderer.clearTarget(dirLight.shadow.map);
-    };
+    // Shadow Select Handlers
+    const mainShadowSel = document.getElementById('mainShadowSelect');
+    const custShadowSel = document.getElementById('custShadowSelect');
+    if (mainShadowSel) mainShadowSel.onchange = (e) => setShadowMode(e.target.value);
+    if (custShadowSel) custShadowSel.onchange = (e) => setShadowMode(e.target.value);
+
     document.getElementById('headlightsToggle').onchange = (e) => gameParams.headlightsEnabled = e.target.checked;
     document.getElementById('lowResToggle').onchange = (e) => renderer.setPixelRatio(e.target.checked ? 0.5 : window.devicePixelRatio);
     document.getElementById('litePhysicsToggle').onchange = (e) => { velIter = e.target.checked ? 2 : 8; posIter = e.target.checked ? 1 : 3; };
